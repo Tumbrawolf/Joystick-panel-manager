@@ -41,6 +41,24 @@ public sealed class ProfileStore
         if (File.Exists(path)) File.Delete(path);
     }
 
+    /// <summary>Loads a profile from an arbitrary file path (as opposed to Load(name), which only
+    /// looks inside ProfilesDirectory) - for importing a profile someone shared, or restoring a
+    /// backup from anywhere on disk.</summary>
+    public Profile LoadFromFile(string path)
+    {
+        var json = File.ReadAllText(path);
+        return JsonSerializer.Deserialize<Profile>(json, JsonOptions)
+            ?? throw new InvalidDataException($"'{path}' could not be parsed as a profile.");
+    }
+
+    /// <summary>Saves a profile to an arbitrary file path (as opposed to Save(profile), which only
+    /// writes inside ProfilesDirectory) - for exporting a profile to share or back up.</summary>
+    public void SaveToFile(Profile profile, string path)
+    {
+        var json = JsonSerializer.Serialize(profile, JsonOptions);
+        File.WriteAllText(path, json);
+    }
+
     private string PathFor(string name) => Path.Combine(ProfilesDirectory, $"{SanitizeFileName(name)}.json");
 
     private static string SanitizeFileName(string name)

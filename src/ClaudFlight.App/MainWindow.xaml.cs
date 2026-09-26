@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -737,9 +738,67 @@ public partial class MainWindow : Window
     {
         if (ProfileListCombo.SelectedItem is not string name) return;
 
-        _currentProfile = _profileStore.Load(name);
-        _engine.LoadProfile(_currentProfile);
+        ApplyLoadedProfile(_profileStore.Load(name));
         _settingsStore.Save(new AppSettings { LastProfileName = _currentProfile.Name });
+    }
+
+    private void ExportProfile_Click(object sender, RoutedEventArgs e)
+    {
+        _currentProfile.Name = string.IsNullOrWhiteSpace(ProfileNameBox.Text) ? "Default" : ProfileNameBox.Text.Trim();
+        HarvestInputLabels();
+
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export profile",
+            Filter = "ClaudFlight profile (*.json)|*.json",
+            FileName = _currentProfile.Name,
+            DefaultExt = ".json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            _profileStore.SaveToFile(_currentProfile, dialog.FileName);
+            MessageBox.Show(this, $"Exported profile '{_currentProfile.Name}' to:\n{dialog.FileName}", "Export profile", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (IOException ex)
+        {
+            MessageBox.Show(this, $"Couldn't export the profile:\n{ex.Message}", "Export profile", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private void ImportProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Import profile",
+            Filter = "ClaudFlight profile (*.json)|*.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        Profile imported;
+        try
+        {
+            imported = _profileStore.LoadFromFile(dialog.FileName);
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            MessageBox.Show(this, $"Couldn't import that file as a profile:\n{ex.Message}", "Import profile", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        ApplyLoadedProfile(imported);
+        MessageBox.Show(this, $"Imported profile '{_currentProfile.Name}'.\n\nIt's now the active profile - click Save if you want it to also appear in the profile list above.",
+            "Import profile", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    /// <summary>Common tail end of switching to a newly-loaded-or-imported profile: wire it into
+    /// the engine, apply its device/control renames to whatever's currently connected, and rebuild
+    /// every dependent view.</summary>
+    private void ApplyLoadedProfile(Profile profile)
+    {
+        _currentProfile = profile;
+        _engine.LoadProfile(_currentProfile);
 
         foreach (var device in Devices)
         {

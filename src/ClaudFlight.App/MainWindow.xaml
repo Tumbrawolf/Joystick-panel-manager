@@ -45,7 +45,11 @@
                 <Button Content="New" Click="NewProfile_Click" Padding="8,2" Margin="0,0,4,0" />
                 <Button Content="Save" Click="SaveProfile_Click" Padding="8,2" Margin="0,0,12,0" />
                 <ComboBox x:Name="ProfileListCombo" Width="160" Margin="0,0,4,0" />
-                <Button Content="Load" Click="LoadProfile_Click" Padding="8,2" />
+                <Button Content="Load" Click="LoadProfile_Click" Padding="8,2" Margin="0,0,12,0" />
+                <Button Content="Export..." Click="ExportProfile_Click" Padding="8,2" Margin="0,0,4,0"
+                        ToolTip="Save the current profile as a .json file anywhere - for backup or sharing with someone else." />
+                <Button Content="Import..." Click="ImportProfile_Click" Padding="8,2"
+                        ToolTip="Load a profile from a .json file anywhere (e.g. one someone shared with you). Becomes the active profile; click Save to also keep it in the list above." />
             </StackPanel>
         </Border>
 
