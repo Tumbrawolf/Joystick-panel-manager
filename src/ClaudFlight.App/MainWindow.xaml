@@ -1,0 +1,332 @@
+<Window x:Class="ClaudFlight.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:vm="clr-namespace:ClaudFlight.App.ViewModels"
+        xmlns:conv="clr-namespace:ClaudFlight.App.Converters"
+        mc:Ignorable="d"
+        Title="ClaudFlight" Height="720" Width="1100">
+    <Window.Resources>
+        <conv:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
+        <ContextMenu x:Key="HideControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
+        </ContextMenu>
+        <Style x:Key="ButtonLampStyle" TargetType="Border">
+            <Setter Property="Width" Value="26" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="CornerRadius" Value="4" />
+            <Setter Property="Background" Value="#DDDDDD" />
+            <Setter Property="BorderBrush" Value="#999999" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsPressed}" Value="True">
+                    <Setter Property="Background" Value="#3AA655" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- Status bar -->
+        <Border DockPanel.Dock="Top" Background="#EEEEEE" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" Padding="8,4">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="VJoyStatusText" Text="vJoy: checking..." VerticalAlignment="Center" Margin="0,0,16,0" />
+                <Button Content="Refresh Devices" Click="RefreshDevices_Click" Padding="8,2" />
+            </StackPanel>
+        </Border>
+
+        <!-- Profile bar -->
+        <Border DockPanel.Dock="Bottom" Background="#EEEEEE" BorderBrush="#CCCCCC" BorderThickness="0,1,0,0" Padding="8">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="Profile:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                <TextBox x:Name="ProfileNameBox" Width="140" Margin="0,0,8,0" />
+                <Button Content="New" Click="NewProfile_Click" Padding="8,2" Margin="0,0,4,0" />
+                <Button Content="Save" Click="SaveProfile_Click" Padding="8,2" Margin="0,0,12,0" />
+                <ComboBox x:Name="ProfileListCombo" Width="160" Margin="0,0,4,0" />
+                <Button Content="Load" Click="LoadProfile_Click" Padding="8,2" />
+            </StackPanel>
+        </Border>
+
+        <TabControl>
+            <!-- Live Monitor -->
+            <TabItem Header="Live Monitor">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" Padding="8" Background="#F7F7F7"
+                            Visibility="{Binding HiddenDevices.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Hidden devices:" VerticalAlignment="Center" Margin="0,0,8,0" FontStyle="Italic" />
+                            <ComboBox x:Name="HiddenDevicesCombo" Width="220" ItemsSource="{Binding HiddenDevices}" DisplayMemberPath="Name"
+                                      SelectedIndex="0" Margin="0,0,6,0" />
+                            <Button Content="Add back" Click="RestoreDevice_Click" Padding="8,2" ToolTip="Show the selected device again" />
+                        </StackPanel>
+                    </Border>
+
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Devices}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate DataType="{x:Type vm:DeviceMonitorViewModel}">
+                                <Border BorderBrush="#CCCCCC" BorderThickness="1" Margin="8" Padding="10" Width="320" VerticalAlignment="Top"
+                                        AllowDrop="True" Drop="DeviceCard_Drop">
+                                    <StackPanel>
+                                        <Grid Cursor="SizeAll" ToolTip="Drag to reorder"
+                                              PreviewMouseLeftButtonDown="DeviceCardHeader_PreviewMouseLeftButtonDown"
+                                              MouseMove="DeviceCardHeader_MouseMove">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding DeviceName}" FontSize="11" Foreground="Gray" VerticalAlignment="Center" />
+                                            <Button Grid.Column="1" Content="Remove" Click="RemoveDevice_Click" Padding="4,0" FontSize="10" ToolTip="Hide this device" />
+                                        </Grid>
+                                        <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontWeight="Bold" Margin="0,0,0,8" />
+
+                                        <ItemsControl ItemsSource="{Binding Axes}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:AxisReadingViewModel}">
+                                                    <Grid Margin="0,2" ContextMenu="{StaticResource HideControlMenu}">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="90" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="50" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Grid.Column="0" Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" ToolTip="{Binding Axis}"
+                                                                 BorderThickness="0" Background="Transparent" Padding="0" Margin="0,0,4,0" />
+                                                        <ProgressBar Grid.Column="1" Minimum="0" Maximum="1" Value="{Binding Normalized, Mode=OneWay}" Height="14" Margin="4,0" />
+                                                        <TextBlock Grid.Column="2" Text="{Binding Raw}" HorizontalAlignment="Right" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <ItemsControl ItemsSource="{Binding Buttons}" Margin="0,8,0,0">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel />
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:ButtonReadingViewModel}">
+                                                    <StackPanel Margin="2" Width="58" ContextMenu="{StaticResource HideControlMenu}">
+                                                        <Border Style="{StaticResource ButtonLampStyle}" HorizontalAlignment="Center"
+                                                                ToolTip="This is the number to type into Mapping's Source #/Target # field for this button">
+                                                            <TextBlock Text="{Binding DisplayNumber}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="10" />
+                                                        </Border>
+                                                        <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontSize="9" TextAlignment="Center"
+                                                                 BorderThickness="0" Background="Transparent" Padding="0" Margin="0,1,0,0" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <ItemsControl ItemsSource="{Binding Povs}" Margin="0,8,0,0">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:PovReadingViewModel}">
+                                                    <StackPanel Orientation="Horizontal" Margin="0,2" ContextMenu="{StaticResource HideControlMenu}">
+                                                        <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" Width="80"
+                                                                 BorderThickness="0" Background="Transparent" Padding="0"
+                                                                 ToolTip="{Binding DisplayNumber, StringFormat='Type {0} into Mapping\'s Source #/Target # for this POV'}" />
+                                                        <TextBlock Text=": " />
+                                                        <TextBlock Text="{Binding DirectionText, Mode=OneWay}" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                    Visibility="{Binding HiddenControls.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                                            <TextBlock Text="Hidden:" VerticalAlignment="Center" Margin="0,0,4,0" FontStyle="Italic" FontSize="11" />
+                                            <ComboBox Width="120" ItemsSource="{Binding HiddenControls}" SelectedItem="{Binding SelectedHiddenControl}"
+                                                      SelectedIndex="0" Margin="0,0,4,0" FontSize="11" />
+                                            <Button Content="Restore" Click="RestoreControl_Click" Padding="4,0" FontSize="11" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Calibration -->
+            <TabItem Header="Calibration">
+                <DataGrid ItemsSource="{Binding CalibrationRows}" AutoGenerateColumns="False" CanUserAddRows="False" Margin="8">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Device" Binding="{Binding Device.Label}" IsReadOnly="True" />
+                        <DataGridTextColumn Header="Name" Binding="{Binding AxisVm.Label, UpdateSourceTrigger=PropertyChanged}" Width="110" />
+                        <DataGridTextColumn Header="Axis" Binding="{Binding Axis}" IsReadOnly="True" Width="80" />
+                        <DataGridTextColumn Header="Raw" Binding="{Binding RawLive}" IsReadOnly="True" Width="60" />
+                        <DataGridTextColumn Header="Normalized" Binding="{Binding NormalizedLive, StringFormat=F2}" IsReadOnly="True" Width="80" />
+                        <DataGridTextColumn Header="Min" Binding="{Binding RawMin, UpdateSourceTrigger=PropertyChanged}" Width="60" />
+                        <DataGridTemplateColumn Header="" Width="90">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="Set Min" Click="SetMinFromLive_Click" Padding="4,0" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Center" Binding="{Binding RawCenter, UpdateSourceTrigger=PropertyChanged}" Width="60" />
+                        <DataGridTemplateColumn Header="" Width="150">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Content="Set Center" Click="SetCenterFromLive_Click" Padding="4,0" ToolTip="Capture the current live raw value as center" />
+                                        <Button Content="= Mid" Click="SetCenterFromMinMax_Click" Padding="4,0" Margin="4,0,0,0" ToolTip="Set center to the midpoint of Min and Max" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Max" Binding="{Binding RawMax, UpdateSourceTrigger=PropertyChanged}" Width="60" />
+                        <DataGridTemplateColumn Header="" Width="90">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <Button Content="Set Max" Click="SetMaxFromLive_Click" Padding="4,0" />
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTextColumn Header="Deadzone" Binding="{Binding DeadZone, UpdateSourceTrigger=PropertyChanged}" Width="70" />
+                        <DataGridTextColumn Header="Curve" Binding="{Binding Curve, UpdateSourceTrigger=PropertyChanged}" Width="60" />
+                        <DataGridCheckBoxColumn Header="Invert" Binding="{Binding Invert, UpdateSourceTrigger=PropertyChanged}" Width="50" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </TabItem>
+
+            <!-- Mapping -->
+            <TabItem Header="Mapping">
+                <DockPanel Margin="8">
+                    <Expander DockPanel.Dock="Top" Header="What is vJoy, and how do I set this up? (click to expand)" Margin="0,0,0,8"
+                              Background="#F7F7F7" BorderBrush="#CCCCCC" BorderThickness="1" Padding="8">
+                        <StackPanel Margin="4,8,4,4">
+                            <TextBlock TextWrapping="Wrap" FontWeight="Bold" Text="What vJoy is" Margin="0,0,0,2" />
+                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,8">
+                                vJoy is a separate driver (not part of this app) that creates fake joysticks. As far as Windows
+                                and every game are concerned, a "vJoy device" looks and behaves exactly like a real USB joystick
+                                plugged in - except nothing physical is attached. This app is what feeds it values, based on the
+                                mappings you set up below. Games can't natively combine several separate physical devices (your
+                                sticks, throttle, panel) into one controller; routing everything through one vJoy device is the trick.
+                            </TextBlock>
+
+                            <TextBlock TextWrapping="Wrap" FontWeight="Bold" Text="One-time setup (outside this app)" Margin="0,0,0,2" />
+                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,8">
+                                1. Install vJoy from
+                                <Hyperlink NavigateUri="https://sourceforge.net/projects/vjoystick/" RequestNavigate="Hyperlink_RequestNavigate">sourceforge.net/projects/vjoystick</Hyperlink>
+                                (the status bar above shows whether this app can currently see it).
+                                <LineBreak /><LineBreak />
+                                2. Run "Configure vJoy" from the Start Menu (installed alongside the driver) and set how many
+                                axes, buttons, and POVs vJoy device 1 should have. If unsure, enable all 8 axes and a generous
+                                number of buttons (e.g. 32) - you can change this later.
+                                <LineBreak /><LineBreak />
+                                3. That's it for vJoy itself. Everything else happens in this app and in your game's control settings.
+                            </TextBlock>
+
+                            <TextBlock TextWrapping="Wrap" FontWeight="Bold" Text="The vJoy device number (1-16)" Margin="0,0,0,2" />
+                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,8">
+                                vJoy can create up to 16 of these fake joysticks at once, like plugging in 16 controllers. The
+                                number just picks which one a mapping writes into. For almost everyone, just use device 1 for
+                                everything - one virtual joystick with all your real controls combined onto it. You'd only need
+                                more if you deliberately wanted separate virtual controllers for different purposes.
+                            </TextBlock>
+
+                            <TextBlock TextWrapping="Wrap" FontWeight="Bold" Text="Putting it together" Margin="0,0,0,2" />
+                            <TextBlock TextWrapping="Wrap" Margin="0,0,0,8">
+                                Below, each row you add is a "mapping": read this control from this physical device (the
+                                Source), write it to this slot on this vJoy device (the Target). Add one mapping per control you
+                                want to use - e.g. your stick's X/Y axes, throttle lever, rudder twist, and switch panel buttons -
+                                all targeting vJoy device 1. Once you're done, open Windows' "Set up USB game controllers"
+                                (search the Start Menu for it) to see and test-wiggle "vJoy Device" like any other controller
+                                before jumping into a game. Finally, in your game's control bindings, bind to "vJoy Device"
+                                instead of your physical hardware.
+                            </TextBlock>
+                        </StackPanel>
+                    </Expander>
+
+                    <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="1" Padding="8" Margin="0,0,0,8">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Source device:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="SourceDeviceCombo" Width="150" ItemsSource="{Binding Devices}" DisplayMemberPath="Label" Margin="0,0,12,0"
+                                      SelectionChanged="SourceDeviceCombo_SelectionChanged"
+                                      ToolTip="The physical device to read this mapping's input from." />
+
+                            <TextBlock Text="Kind:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="SourceKindCombo" Width="80" ItemsSource="{Binding ControlKindValues}" SelectedIndex="0" Margin="0,0,12,0"
+                                      SelectionChanged="SourceKindCombo_SelectionChanged"
+                                      ToolTip="Axis = a continuous control like a stick tilt, throttle lever, or dial (reads as a range of values).&#10;Button = a simple on/off switch or push button.&#10;Pov = a hat switch, reporting up to 8 directions plus centered." />
+
+                            <TextBlock Text="Source:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="SourceControlCombo" Width="150" ItemsSource="{Binding SourceControlOptions}" DisplayMemberPath="Display" Margin="0,0,12,0"
+                                      ToolTip="The specific axis/button/POV to read, picked from what's actually on the selected device." />
+
+                            <TextBlock Text="vJoy device #:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <TextBox x:Name="TargetVJoyIdBox" Width="40" Text="1" Margin="0,0,12,0" TextChanged="TargetVJoyIdBox_TextChanged"
+                                     ToolTip="Which virtual vJoy device (1-16) to write this mapping's output to. This is the number the game will see - e.g. 'vJoy Device 1'. Multiple mappings can share the same vJoy device number to build up one combined virtual controller." />
+
+                            <TextBlock Text="Target:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="TargetControlCombo" Width="150" ItemsSource="{Binding TargetControlOptions}" DisplayMemberPath="Display" Margin="0,0,12,0"
+                                      ToolTip="The specific axis/button/POV slot on the vJoy device to write to." />
+
+                            <Button Content="Add mapping" Click="AddBinding_Click" Padding="8,2" Margin="0,0,6,0" />
+                            <Button Content="Auto-populate all controls" Click="AutoPopulateMappings_Click" Padding="8,2"
+                                    ToolTip="Adds one mapping for every axis/button/POV on the selected source device, onto the selected vJoy device # - filling in the next free slot per control and skipping anything that would collide with an existing mapping or exceed vJoy's configured capacity. The one-at-a-time Add mapping above still works as normal; use whichever you prefer, and edit/remove rows below either way." />
+                        </StackPanel>
+                    </Border>
+
+                    <DataGrid x:Name="BindingsGrid" ItemsSource="{Binding BindingRows}" AutoGenerateColumns="False" CanUserAddRows="False"
+                              CellEditEnding="BindingsGrid_CellEditEnding">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Source Device" Binding="{Binding SourceDevice.Label}" IsReadOnly="True" Width="140" />
+                            <DataGridTextColumn Header="Name" Binding="{Binding SourceControl.Label, UpdateSourceTrigger=PropertyChanged}" Width="120">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="The source control's friendly name - editable here too, synced with Live Monitor and Calibration." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Kind" Binding="{Binding SourceKind}" IsReadOnly="True" Width="70">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="Axis (continuous), Button (on/off), or Pov (hat switch)." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Source #" Binding="{Binding SourceIndexText}" IsReadOnly="True" Width="90">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="The specific control read from the source device (DirectInput axis name, or 1-based button/POV number)." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="vJoy Device #" Binding="{Binding TargetVJoyDeviceId, UpdateSourceTrigger=PropertyChanged}" Width="100">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="Which virtual vJoy device (1-16) this mapping writes to - the device number games bind to. Editable directly here." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Target #" Binding="{Binding TargetIndexText, UpdateSourceTrigger=PropertyChanged}" Width="90">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="The specific control on the vJoy device this mapping writes to (vJoy axis name, or 1-based button/POV number). Editable directly here." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTemplateColumn Header="" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Remove" Click="RemoveBinding_Click" Padding="4,0" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Window>
