@@ -60,6 +60,11 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         StateChanged += MainWindow_StateChanged;
+
+        // If Windows itself is shutting down or logging off, let the app actually exit (and run
+        // its normal cleanup/autosave) instead of cancelling the close to hide in the tray - doing
+        // that here would fight the OS shutdown instead of just getting out of its way.
+        Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => _isExiting = true;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
