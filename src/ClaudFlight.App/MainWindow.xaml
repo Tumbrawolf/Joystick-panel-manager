@@ -327,6 +327,119 @@
                     </DataGrid>
                 </DockPanel>
             </TabItem>
+
+            <!-- Keyboard Mapping -->
+            <TabItem Header="Keyboard Mapping">
+                <DockPanel Margin="8">
+                    <Border DockPanel.Dock="Top" BorderBrush="#E0C060" Background="#FFF8E6" BorderThickness="1" Padding="8" Margin="0,0,0,8">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <CheckBox x:Name="KeyboardInjectionToggle" Content="Enable keyboard injection" VerticalAlignment="Center" FontWeight="Bold"
+                                          Checked="KeyboardInjectionToggle_Changed" Unchecked="KeyboardInjectionToggle_Changed"
+                                          ToolTip="Off by default every time the app starts. While off, none of the mappings below do anything, even though they're saved." />
+                            </StackPanel>
+                            <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#886600">
+                                Starts OFF every launch, on purpose - this has to simulate real keyboard input to work, which some
+                                anti-cheat software flags as suspicious. Only turn it on for games/situations where that's fine.
+                            </TextBlock>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8" Foreground="#555555">
+                        Maps a physical axis/button/POV straight to a simulated keyboard key press - for games or functions that
+                        take keyboard input but not joystick input. This is independent of the Mapping tab's vJoy mappings; the
+                        same control can have both at once.
+                    </TextBlock>
+
+                    <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="1" Padding="8" Margin="0,0,0,8">
+                        <WrapPanel Orientation="Horizontal">
+                            <TextBlock Text="Source device:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="KeySourceDeviceCombo" Width="150" ItemsSource="{Binding Devices}" DisplayMemberPath="Label" Margin="0,0,12,0"
+                                      SelectionChanged="KeySourceDeviceCombo_SelectionChanged" />
+
+                            <TextBlock Text="Kind:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="KeySourceKindCombo" Width="80" ItemsSource="{Binding ControlKindValues}" SelectedIndex="0" Margin="0,0,12,0"
+                                      SelectionChanged="KeySourceKindCombo_SelectionChanged" />
+
+                            <TextBlock Text="Source:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="KeySourceControlCombo" Width="150" ItemsSource="{Binding KeySourceControlOptions}" DisplayMemberPath="Display" Margin="0,0,12,0" />
+
+                            <TextBlock Text="Key:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="KeyNameCombo" Width="90" ItemsSource="{Binding KeyOptions}" DisplayMemberPath="Name" SelectedIndex="0" Margin="0,0,12,0"
+                                      ToolTip="The key to simulate pressing. F13-F24 are good choices since real keyboards don't have them, so they can't collide with normal typing." />
+
+                            <CheckBox x:Name="HoldWhilePressedCheck" Content="Hold" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"
+                                      ToolTip="Button/Pov only: checked = the key stays held down for as long as the control is held. Unchecked = a single tap is sent each time it's pressed." />
+
+                            <TextBlock Text="POV dir:" VerticalAlignment="Center" Margin="0,0,4,0"
+                                       ToolTip="Pov only: which hat direction activates this key - 0=North, 1=East, 2=South, 3=West." />
+                            <TextBox x:Name="PovDirectionBox" Width="30" Text="0" Margin="0,0,12,0"
+                                     ToolTip="Pov only: which hat direction activates this key - 0=North, 1=East, 2=South, 3=West." />
+
+                            <TextBlock Text="Axis threshold:" VerticalAlignment="Center" Margin="0,0,4,0"
+                                       ToolTip="Axis only: 0..1 magnitude the axis must be pushed past to trigger the key." />
+                            <TextBox x:Name="AxisThresholdBox" Width="40" Text="0.5" Margin="0,0,4,0"
+                                     ToolTip="Axis only: 0..1 magnitude the axis must be pushed past to trigger the key." />
+                            <CheckBox x:Name="AxisAboveCheck" Content="Above" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"
+                                      ToolTip="Axis only: checked = trigger when pushed positive past the threshold. Unchecked = trigger when pushed negative past it." />
+
+                            <Button Content="Add key mapping" Click="AddKeyBinding_Click" Padding="8,2" />
+                        </WrapPanel>
+                    </Border>
+
+                    <DataGrid x:Name="KeyBindingsGrid" ItemsSource="{Binding KeyBindingRows}" AutoGenerateColumns="False" CanUserAddRows="False"
+                              CellEditEnding="KeyBindingsGrid_CellEditEnding">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Source Device" Binding="{Binding SourceDevice.Label}" IsReadOnly="True" Width="130" />
+                            <DataGridTextColumn Header="Name" Binding="{Binding SourceControl.Label, UpdateSourceTrigger=PropertyChanged}" Width="110" />
+                            <DataGridTextColumn Header="Kind" Binding="{Binding SourceKind}" IsReadOnly="True" Width="60" />
+                            <DataGridTextColumn Header="Source #" Binding="{Binding SourceIndexText}" IsReadOnly="True" Width="80" />
+                            <DataGridTextColumn Header="Key" Binding="{Binding KeyName, UpdateSourceTrigger=PropertyChanged}" Width="80">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="The simulated key - must match a name from the Key dropdown above exactly (e.g. F13, A, Space)." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridCheckBoxColumn Header="Hold" Binding="{Binding HoldWhilePressed, UpdateSourceTrigger=PropertyChanged}" Width="50">
+                                <DataGridCheckBoxColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="Button/Pov only: checked = hold the key while the control is held; unchecked = single tap per press." />
+                                    </Style>
+                                </DataGridCheckBoxColumn.HeaderStyle>
+                            </DataGridCheckBoxColumn>
+                            <DataGridTextColumn Header="POV Dir" Binding="{Binding PovDirection, UpdateSourceTrigger=PropertyChanged}" Width="60">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="Pov only: 0=North, 1=East, 2=South, 3=West." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridTextColumn Header="Threshold" Binding="{Binding AxisThreshold, UpdateSourceTrigger=PropertyChanged}" Width="70">
+                                <DataGridTextColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="Axis only: 0..1 magnitude that must be crossed to trigger the key." />
+                                    </Style>
+                                </DataGridTextColumn.HeaderStyle>
+                            </DataGridTextColumn>
+                            <DataGridCheckBoxColumn Header="Above" Binding="{Binding AxisAboveThreshold, UpdateSourceTrigger=PropertyChanged}" Width="55">
+                                <DataGridCheckBoxColumn.HeaderStyle>
+                                    <Style TargetType="DataGridColumnHeader">
+                                        <Setter Property="ToolTip" Value="Axis only: checked = trigger on the positive side of the threshold; unchecked = the negative side." />
+                                    </Style>
+                                </DataGridCheckBoxColumn.HeaderStyle>
+                            </DataGridCheckBoxColumn>
+                            <DataGridTemplateColumn Header="" Width="80">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <Button Content="Remove" Click="RemoveKeyBinding_Click" Padding="4,0" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
         </TabControl>
     </DockPanel>
 </Window>

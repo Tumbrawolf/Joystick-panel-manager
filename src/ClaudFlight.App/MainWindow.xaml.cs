@@ -9,6 +9,7 @@ using System.Windows.Navigation;
 using System.Windows.Threading;
 using ClaudFlight.App.ViewModels;
 using ClaudFlight.Core.Devices;
+using ClaudFlight.Core.Keyboard;
 using ClaudFlight.Core.Mapping;
 using ClaudFlight.Core.Models;
 using ClaudFlight.Core.Profiles;
@@ -41,6 +42,10 @@ public partial class MainWindow : Window
     public ObservableCollection<ControlOption> SourceControlOptions { get; } = [];
     public ObservableCollection<ControlOption> TargetControlOptions { get; } = [];
 
+    public ObservableCollection<KeyBindingRowViewModel> KeyBindingRows { get; } = [];
+    public ObservableCollection<ControlOption> KeySourceControlOptions { get; } = [];
+    public IReadOnlyList<KeyOption> KeyOptions { get; } = KeyCatalog.Keys;
+
     public MainWindow()
     {
         _engine = new MappingEngine(_deviceManager, _vjoyManager);
@@ -71,6 +76,7 @@ public partial class MainWindow : Window
         _engine.LoadProfile(_currentProfile);
         RefreshDevices();
         RebuildBindingRowsFromProfile();
+        RebuildKeyBindingRowsFromProfile();
         RefreshProfileList();
         _timer.Start();
     }
@@ -182,6 +188,7 @@ public partial class MainWindow : Window
 
         RebuildCalibrationRows();
         RefreshMappingFormOptions();
+        RefreshKeySourceControlOptions();
     }
 
     /// <summary>Captures the current on-screen device card order into the profile so drag/drop
@@ -639,6 +646,7 @@ public partial class MainWindow : Window
     {
         _currentProfile = new Profile();
         BindingRows.Clear();
+        KeyBindingRows.Clear();
         _engine.LoadProfile(_currentProfile);
         RebuildCalibrationRows();
         ProfileNameBox.Text = _currentProfile.Name;
@@ -670,7 +678,123 @@ public partial class MainWindow : Window
         }
 
         RebuildBindingRowsFromProfile();
+        RebuildKeyBindingRowsFromProfile();
         RebuildCalibrationRows();
         ProfileNameBox.Text = _currentProfile.Name;
+    }
+
+    private void KeyboardInjectionToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        _engine.KeyboardInjectionEnabled = KeyboardInjectionToggle.IsChecked == true;
+    }
+
+    /// <summary>Rebuilds KeyBindingRows from _currentProfile.KeyBindings, resolving each row's
+    /// live device/control references against whatever's currently connected.</summary>
+    private void RebuildKeyBindingRowsFromProfile()
+    {
+        KeyBindingRows.Clear();
+        foreach (var keyBinding in _currentProfile.KeyBindings)
+        {
+            var device = Devices.FirstOrDefault(d => d.DeviceGuid == keyBinding.Source.DeviceGuid);
+            KeyBindingRows.Add(KeyBindingRowViewModel.FromKeyBinding(keyBinding, device));
+        }
+    }
+
+    private void RebuildProfileKeyBindings()
+    {
+        _currentProfile.KeyBindings.Clear();
+        foreach (var row in KeyBindingRows)
+        {
+            var keyBinding = row.TryBuildKeyBinding(out _);
+            if (keyBinding is not null) _currentProfile.KeyBindings.Add(keyBinding);
+        }
+        _engine.LoadProfile(_currentProfile);
+    }
+
+    private void AddKeyBinding_Click(object sender, RoutedEventArgs e)
+    {
+        if (KeySourceDeviceCombo.SelectedItem is not DeviceMonitorViewModel device)
+        {
+            MessageBox.Show(this, "Select a source device first.", "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (KeySourceControlCombo.SelectedItem is not ControlOption sourceOption)
+        {
+            MessageBox.Show(this, "Select a source control first - this list is empty if the device has none of the selected Kind.", "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (KeyNameCombo.SelectedItem is not KeyOption keyOption)
+        {
+            MessageBox.Show(this, "Select a key first.", "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var row = new KeyBindingRowViewModel
+        {
+            SourceDeviceGuid = device.DeviceGuid,
+            SourceDevice = device,
+            SourceKind = (ControlKind)KeySourceKindCombo.SelectedItem,
+            SourceIndexText = sourceOption.IndexText,
+            KeyName = keyOption.Name,
+            HoldWhilePressed = HoldWhilePressedCheck.IsChecked == true,
+            PovDirection = int.TryParse(PovDirectionBox.Text, out var povDir) ? povDir : 0,
+            AxisThreshold = double.TryParse(AxisThresholdBox.Text, out var threshold) ? threshold : 0.5,
+            AxisAboveThreshold = AxisAboveCheck.IsChecked == true,
+        };
+
+        var keyBinding = row.TryBuildKeyBinding(out var error);
+        if (keyBinding is null)
+        {
+            MessageBox.Show(this, error, "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        row.SourceControl = device.FindControl(keyBinding.Source.Kind, keyBinding.Source.Index);
+        KeyBindingRows.Add(row);
+        RebuildProfileKeyBindings();
+    }
+
+    private void RemoveKeyBinding_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: KeyBindingRowViewModel row })
+        {
+            KeyBindingRows.Remove(row);
+            RebuildProfileKeyBindings();
+        }
+    }
+
+    private void KeySourceDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshKeySourceControlOptions();
+    private void KeySourceKindCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshKeySourceControlOptions();
+
+    private void RefreshKeySourceControlOptions()
+    {
+        KeySourceControlOptions.Clear();
+        if (KeySourceDeviceCombo?.SelectedItem is not DeviceMonitorViewModel device) return;
+        if (KeySourceKindCombo?.SelectedItem is not ControlKind kind) return;
+
+        switch (kind)
+        {
+            case ControlKind.Axis:
+                foreach (var axis in device.Axes)
+                    KeySourceControlOptions.Add(new ControlOption($"{axis.Label} ({axis.Axis})", axis.Axis.ToString()));
+                break;
+            case ControlKind.Button:
+                foreach (var button in device.Buttons)
+                    KeySourceControlOptions.Add(new ControlOption($"{button.DisplayNumber} - {button.Label}", button.DisplayNumber.ToString()));
+                break;
+            case ControlKind.Pov:
+                foreach (var pov in device.Povs)
+                    KeySourceControlOptions.Add(new ControlOption($"{pov.DisplayNumber} - {pov.Label}", pov.DisplayNumber.ToString()));
+                break;
+        }
+
+        if (KeySourceControlCombo is { } combo && KeySourceControlOptions.Count > 0) combo.SelectedIndex = 0;
+    }
+
+    /// <summary>Grid edits only land in the bound KeyBindingRowViewModel after this event returns,
+    /// so the rebuild is deferred rather than reading the (still stale) value synchronously here.</summary>
+    private void KeyBindingsGrid_CellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
+    {
+        Dispatcher.BeginInvoke(RebuildProfileKeyBindings, DispatcherPriority.Background);
     }
 }

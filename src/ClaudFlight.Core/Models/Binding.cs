@@ -26,10 +26,35 @@ public sealed class InputLabelEntry
     public required string Label { get; init; }
 }
 
+/// <summary>Maps one axis/button/POV to a simulated keyboard key press, for games/situations that
+/// don't take joystick input for something but do take keyboard input. Purely additive alongside
+/// vJoy Bindings - the same physical control can have both at once.</summary>
+public sealed class KeyBinding
+{
+    public required InputRef Source { get; init; }
+    public required int VirtualKeyCode { get; init; }
+
+    /// <summary>Button/Pov only: true = the key stays held down for as long as the control is
+    /// held; false = a single tap (down then up) is sent each time the control is pressed.</summary>
+    public bool HoldWhilePressed { get; init; } = true;
+
+    /// <summary>Pov only: which discrete direction (0=N, 1=E, 2=S, 3=W) activates this binding.</summary>
+    public int PovDirection { get; init; }
+
+    /// <summary>Axis only: normalized magnitude (0..1) the axis must cross to be considered
+    /// "active" for key-press purposes.</summary>
+    public double AxisThreshold { get; init; } = 0.5;
+
+    /// <summary>Axis only: true = active when the calibrated value is &gt;= threshold, false =
+    /// active when &lt;= -threshold.</summary>
+    public bool AxisAboveThreshold { get; init; } = true;
+}
+
 public sealed class Profile
 {
     public string Name { get; set; } = "Default";
     public List<Binding> Bindings { get; set; } = [];
+    public List<KeyBinding> KeyBindings { get; set; } = [];
     public List<AxisCalibrationEntry> AxisCalibrations { get; set; } = [];
     public List<InputLabelEntry> InputLabels { get; set; } = [];
 

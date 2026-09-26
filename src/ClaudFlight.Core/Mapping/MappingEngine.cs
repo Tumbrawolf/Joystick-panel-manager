@@ -1,17 +1,25 @@
 using ClaudFlight.Core.Devices;
+using ClaudFlight.Core.Keyboard;
 using ClaudFlight.Core.Models;
 using ClaudFlight.Core.VJoy;
 
 namespace ClaudFlight.Core.Mapping;
 
 /// <summary>Drives one poll cycle: reads all physical devices, applies the active profile's
-/// calibration and bindings, and writes the results to the acquired vJoy device(s).</summary>
+/// calibration and bindings, and writes the results to the acquired vJoy device(s) and/or
+/// simulated keyboard input.</summary>
 public sealed class MappingEngine
 {
     private readonly DeviceManager _devices;
     private readonly VJoyManager _vjoy;
     private Profile _profile = new();
     private Dictionary<(Guid, AxisType), AxisCalibration> _calibrations = [];
+    private readonly Dictionary<KeyBinding, bool> _keyActiveState = [];
+
+    /// <summary>Off by default and never persisted - each app launch starts with keyboard
+    /// injection disabled so it's never silently active without the user explicitly turning it
+    /// on for that session.</summary>
+    public bool KeyboardInjectionEnabled { get; set; }
 
     public MappingEngine(DeviceManager devices, VJoyManager vjoy)
     {
@@ -28,6 +36,8 @@ public sealed class MappingEngine
             if (!needed.Contains(id)) _vjoy.Relinquish(id);
         }
         foreach (var id in needed) _vjoy.Acquire(id);
+
+        ReleaseAllHeldKeys();
 
         _profile = profile;
         _calibrations = profile.AxisCalibrations.ToDictionary(c => (c.DeviceGuid, c.Axis), c => c.Calibration);
@@ -50,7 +60,8 @@ public sealed class MappingEngine
         _calibrations.GetValueOrDefault((deviceGuid, axis), DefaultCalibration);
 
     /// <summary>Polls every physical device once, applies the active profile, and pushes the
-    /// result to vJoy. Returns the raw per-device snapshots so the UI can render a live view.</summary>
+    /// result to vJoy and/or simulated key presses. Returns the raw per-device snapshots so the
+    /// UI can render a live view.</summary>
     public IReadOnlyDictionary<Guid, JoystickSnapshot> Tick()
     {
         // Poll each device independently: one device throwing (or hanging on a driver quirk)
@@ -99,6 +110,16 @@ public sealed class MappingEngine
         foreach (var ((deviceId, povIndex), direction) in povAgg)
             _vjoy.SetDiscretePov(deviceId, povIndex, direction);
 
+        if (KeyboardInjectionEnabled)
+        {
+            ProcessKeyBindings(snapshots);
+        }
+        else if (_keyActiveState.Values.Any(active => active))
+        {
+            // Safety net: if injection gets toggled off mid-hold, don't leave a key stuck down.
+            ReleaseAllHeldKeys();
+        }
+
         return snapshots;
     }
 
@@ -131,6 +152,69 @@ public sealed class MappingEngine
         var key = (binding.Target.VJoyDeviceId, binding.Target.Index);
         if (direction != -1) agg[key] = direction;
         else agg.TryAdd(key, -1);
+    }
+
+    private void ProcessKeyBindings(IReadOnlyDictionary<Guid, JoystickSnapshot> snapshots)
+    {
+        foreach (var keyBinding in _profile.KeyBindings)
+        {
+            if (!snapshots.TryGetValue(keyBinding.Source.DeviceGuid, out var snap)) continue;
+
+            var isActive = keyBinding.Source.Kind switch
+            {
+                ControlKind.Button => keyBinding.Source.Index < snap.Buttons.Count && snap.Buttons[keyBinding.Source.Index],
+                ControlKind.Pov => IsPovDirectionActive(keyBinding, snap),
+                ControlKind.Axis => IsAxisThresholdActive(keyBinding, snap),
+                _ => false,
+            };
+
+            var wasActive = _keyActiveState.GetValueOrDefault(keyBinding);
+
+            if (keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed)
+            {
+                if (isActive && !wasActive) KeyboardInjector.KeyDown(keyBinding.VirtualKeyCode);
+                else if (!isActive && wasActive) KeyboardInjector.KeyUp(keyBinding.VirtualKeyCode);
+            }
+            else if (isActive && !wasActive)
+            {
+                // Single tap: fire once on the rising edge rather than holding the key down.
+                KeyboardInjector.KeyDown(keyBinding.VirtualKeyCode);
+                KeyboardInjector.KeyUp(keyBinding.VirtualKeyCode);
+            }
+
+            _keyActiveState[keyBinding] = isActive;
+        }
+    }
+
+    private static bool IsPovDirectionActive(KeyBinding keyBinding, JoystickSnapshot snap)
+    {
+        if (keyBinding.Source.Index >= snap.PointOfViews.Count) return false;
+        return DirectInputPovToDiscrete(snap.PointOfViews[keyBinding.Source.Index]) == keyBinding.PovDirection;
+    }
+
+    private bool IsAxisThresholdActive(KeyBinding keyBinding, JoystickSnapshot snap)
+    {
+        var axisType = (AxisType)keyBinding.Source.Index;
+        if (!snap.Axes.TryGetValue(axisType, out var raw)) return false;
+
+        var calibration = _calibrations.GetValueOrDefault((keyBinding.Source.DeviceGuid, axisType), DefaultCalibration);
+        var normalized = calibration.Normalize(raw);
+
+        return keyBinding.AxisAboveThreshold ? normalized >= keyBinding.AxisThreshold : normalized <= -keyBinding.AxisThreshold;
+    }
+
+    /// <summary>Releases every key currently held down by a KeyBinding (e.g. when injection is
+    /// toggled off, the profile changes, or the app is closing) so nothing gets left stuck.</summary>
+    private void ReleaseAllHeldKeys()
+    {
+        foreach (var (keyBinding, active) in _keyActiveState)
+        {
+            if (active && (keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed))
+            {
+                KeyboardInjector.KeyUp(keyBinding.VirtualKeyCode);
+            }
+        }
+        _keyActiveState.Clear();
     }
 
     /// <summary>DirectInput reports POV angle in hundredths of a degree (0=N, 9000=E, ...), -1 when centered.
