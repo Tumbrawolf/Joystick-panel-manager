@@ -100,7 +100,7 @@ public sealed class BindingRowViewModel : ObservableBase
         {
             error = SourceKind == ControlKind.Axis
                 ? $"Target index '{TargetIndexText}' is not a valid vJoy axis name (X, Y, Z, RotationX, RotationY, RotationZ, Slider0, Slider1)."
-                : $"Target index '{TargetIndexText}' is not a valid 1-based number.";
+                : $"Target index '{TargetIndexText}' is not a valid 1-based number from 1 to {(SourceKind == ControlKind.Button ? 128 : 4)}.";
             return null;
         }
 
@@ -146,7 +146,11 @@ public sealed class BindingRowViewModel : ObservableBase
             return false;
         }
 
-        if (int.TryParse(TargetIndexText.Trim(), out var oneBased) && oneBased >= 1)
+        // Upper-bounded (vJoy's real max is 128 buttons / 4 POVs) so a stray typo in this
+        // directly-editable grid cell fails loudly here rather than silently wrapping around
+        // when VJoyManager later narrows it to a byte for the native SetButton/SetDiscPov call.
+        var max = SourceKind == ControlKind.Button ? 128 : 4;
+        if (int.TryParse(TargetIndexText.Trim(), out var oneBased) && oneBased >= 1 && oneBased <= max)
         {
             index = oneBased - 1;
             return true;

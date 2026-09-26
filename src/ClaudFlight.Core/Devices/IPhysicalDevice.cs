@@ -8,7 +8,6 @@ namespace ClaudFlight.Core.Devices;
 public interface IPhysicalDevice : IDisposable
 {
     Guid InstanceGuid { get; }
-    Guid ProductGuid { get; }
     string Name { get; }
     int ButtonCount { get; }
     int PovCount { get; }

@@ -158,6 +158,13 @@ public sealed class MappingEngine
     {
         foreach (var keyBinding in _profile.KeyBindings)
         {
+            // Only ever inject a key from the curated catalog. A KeyBinding's VirtualKeyCode is
+            // validated against this when created through the UI, but a hand-edited or shared
+            // profile.json could set it to anything - re-checking here (the one place that
+            // actually calls SendInput) means a malicious profile file can never make this
+            // simulate a key outside the app's own approved list, however it was loaded.
+            if (!KeyCatalog.Keys.Any(k => k.VKey == keyBinding.VirtualKeyCode)) continue;
+
             if (!snapshots.TryGetValue(keyBinding.Source.DeviceGuid, out var snap)) continue;
 
             var isActive = keyBinding.Source.Kind switch

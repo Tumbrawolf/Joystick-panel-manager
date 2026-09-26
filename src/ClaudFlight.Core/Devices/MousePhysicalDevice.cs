@@ -14,7 +14,6 @@ public sealed class MousePhysicalDevice : IPhysicalDevice
     private readonly IDirectInputDevice8 _device;
 
     public Guid InstanceGuid { get; }
-    public Guid ProductGuid { get; }
     public string Name { get; }
     public int ButtonCount { get; }
     public int PovCount => 0;
@@ -31,7 +30,6 @@ public sealed class MousePhysicalDevice : IPhysicalDevice
     {
         _device = device;
         InstanceGuid = instance.InstanceGuid;
-        ProductGuid = instance.ProductGuid;
         Name = instance.InstanceName;
 
         _device.SetCooperativeLevel(windowHandle, CooperativeLevel.NonExclusive | CooperativeLevel.Background);

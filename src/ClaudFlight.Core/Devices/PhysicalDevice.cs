@@ -27,7 +27,6 @@ public sealed class PhysicalDevice : IPhysicalDevice
     private readonly Dictionary<AxisType, string> _axisDeviceNames;
 
     public Guid InstanceGuid { get; }
-    public Guid ProductGuid { get; }
     public string Name { get; }
     public int ButtonCount { get; }
     public int PovCount { get; }
@@ -48,7 +47,6 @@ public sealed class PhysicalDevice : IPhysicalDevice
     {
         _device = device;
         InstanceGuid = instance.InstanceGuid;
-        ProductGuid = instance.ProductGuid;
         Name = instance.InstanceName;
 
         _device.SetCooperativeLevel(windowHandle, CooperativeLevel.NonExclusive | CooperativeLevel.Background);

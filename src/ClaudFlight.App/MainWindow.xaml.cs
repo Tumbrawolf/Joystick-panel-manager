@@ -27,6 +27,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(33) };
 
     private Profile _currentProfile = new();
+    private System.Windows.Forms.NotifyIcon? _trayIcon;
+    private bool _isExiting;
+    private bool _trayBalloonShown;
 
     public ObservableCollection<DeviceMonitorViewModel> Devices { get; } = [];
     public ObservableCollection<HiddenDeviceViewModel> HiddenDevices { get; } = [];
@@ -56,10 +59,13 @@ public partial class MainWindow : Window
         _timer.Tick += Timer_Tick;
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
+        StateChanged += MainWindow_StateChanged;
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
+        InitializeTrayIcon();
+
         VJoyStatusText.Text = _vjoyManager.IsAvailable
             ? "vJoy: available"
             : $"vJoy: unavailable ({_vjoyManager.UnavailableReason})";
@@ -83,12 +89,71 @@ public partial class MainWindow : Window
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
+        if (!_isExiting)
+        {
+            // Clicking the window's X sends it to the tray instead of exiting, so polling/vJoy
+            // mapping/keyboard injection keep running in the background (e.g. while a game is in
+            // focus). Only the tray icon's own "Exit" actually shuts the app down.
+            e.Cancel = true;
+            Hide();
+
+            if (!_trayBalloonShown)
+            {
+                _trayIcon?.ShowBalloonTip(3000, "ClaudFlight",
+                    "Still running in the background. Right-click the tray icon to reopen or exit.",
+                    System.Windows.Forms.ToolTipIcon.Info);
+                _trayBalloonShown = true;
+            }
+            return;
+        }
+
         _timer.Stop();
         AutoSaveCurrentProfile();
 
         _engine.LoadProfile(new Profile());
         _deviceManager.Dispose();
         _vjoyManager.Dispose();
+        _trayIcon?.Dispose();
+    }
+
+    private void MainWindow_StateChanged(object? sender, EventArgs e)
+    {
+        // Minimizing also drops to the tray rather than sitting in the taskbar, matching Close's
+        // behavior - both just mean "get this out of the way, keep running".
+        if (WindowState == WindowState.Minimized) Hide();
+    }
+
+    private void InitializeTrayIcon()
+    {
+        var icon = Environment.ProcessPath is { } exePath
+            ? System.Drawing.Icon.ExtractAssociatedIcon(exePath)
+            : null;
+
+        var menu = new System.Windows.Forms.ContextMenuStrip();
+        menu.Items.Add("Show ClaudFlight", null, (_, _) => ShowFromTray());
+        menu.Items.Add("Exit", null, (_, _) => ExitFromTray());
+
+        _trayIcon = new System.Windows.Forms.NotifyIcon
+        {
+            Icon = icon ?? System.Drawing.SystemIcons.Application,
+            Text = "ClaudFlight",
+            Visible = true,
+            ContextMenuStrip = menu,
+        };
+        _trayIcon.DoubleClick += (_, _) => ShowFromTray();
+    }
+
+    private void ShowFromTray()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    private void ExitFromTray()
+    {
+        _isExiting = true;
+        Close();
     }
 
     /// <summary>Silently persists whatever the current profile's state is (including any renames
