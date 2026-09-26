@@ -87,7 +87,13 @@
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="{Binding DeviceName}" FontSize="11" Foreground="Gray" VerticalAlignment="Center" />
-                                            <Button Grid.Column="1" Content="Remove" Click="RemoveDevice_Click" Padding="4,0" FontSize="10" ToolTip="Hide this device" />
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <Button Content="Export" Click="ExportDevice_Click" Padding="4,0" FontSize="10" Margin="0,0,2,0"
+                                                        ToolTip="Save just this device's renames, calibration, and mappings to a .json file - for backup or sharing." />
+                                                <Button Content="Import" Click="ImportDevice_Click" Padding="4,0" FontSize="10" Margin="0,0,2,0"
+                                                        ToolTip="Load a device export (from this or another device) and apply it to this device, merging into your current profile." />
+                                                <Button Content="Remove" Click="RemoveDevice_Click" Padding="4,0" FontSize="10" ToolTip="Hide this device" />
+                                            </StackPanel>
                                         </Grid>
                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontWeight="Bold" Margin="0,0,0,8" />
 

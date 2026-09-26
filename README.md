@@ -25,6 +25,8 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
   games/functions that take keyboard input but not joystick input. Off by default every launch;
   you turn it on explicitly per session.
 - **Profiles** — save/load named setups; the last-used profile reloads automatically on startup.
+  Export/Import a whole profile, or just a single device's renames/calibration/mappings, to/from
+  a `.json` file anywhere - for backup or sharing.
 - **Runs in the background** — closing or minimizing the window sends it to the system tray
   instead of exiting, so mapping keeps running while you're in a game.
 

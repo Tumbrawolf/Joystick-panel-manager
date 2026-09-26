@@ -409,6 +409,145 @@ public partial class MainWindow : Window
         RefreshDevices();
     }
 
+    private void ExportDevice_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: DeviceMonitorViewModel device }) return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title = $"Export '{device.Label}'",
+            Filter = "ClaudFlight device export (*.json)|*.json",
+            FileName = device.Label,
+            DefaultExt = ".json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            _profileStore.SaveToFile(BuildDeviceProfile(device), dialog.FileName);
+            MessageBox.Show(this, $"Exported '{device.Label}' to:\n{dialog.FileName}", "Export device", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (IOException ex)
+        {
+            MessageBox.Show(this, $"Couldn't export the device:\n{ex.Message}", "Export device", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Extracts just one device's slice of the current profile (its label, its axes'
+    /// calibration/renames, hidden controls, and any vJoy/keyboard mappings sourced from it) into
+    /// a standalone Profile-shaped file, so it can be exported/shared/re-imported independently of
+    /// everything else in the profile.</summary>
+    private Profile BuildDeviceProfile(DeviceMonitorViewModel device)
+    {
+        HarvestInputLabels();
+        var guid = device.DeviceGuid;
+
+        return new Profile
+        {
+            Name = device.Label,
+            DeviceLabels = _currentProfile.DeviceLabels.TryGetValue(guid, out var label)
+                ? new Dictionary<Guid, string> { [guid] = label }
+                : [],
+            InputLabels = _currentProfile.InputLabels.Where(l => l.DeviceGuid == guid).ToList(),
+            AxisCalibrations = _currentProfile.AxisCalibrations.Where(c => c.DeviceGuid == guid).ToList(),
+            ExcludedControls = _currentProfile.ExcludedControls.Where(c => c.DeviceGuid == guid).ToList(),
+            Bindings = _currentProfile.Bindings.Where(b => b.Source.DeviceGuid == guid).ToList(),
+            KeyBindings = _currentProfile.KeyBindings.Where(k => k.Source.DeviceGuid == guid).ToList(),
+        };
+    }
+
+    private void ImportDevice_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: DeviceMonitorViewModel device }) return;
+
+        var dialog = new OpenFileDialog
+        {
+            Title = $"Import into '{device.Label}'",
+            Filter = "ClaudFlight device export (*.json)|*.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        Profile imported;
+        try
+        {
+            imported = _profileStore.LoadFromFile(dialog.FileName);
+        }
+        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or InvalidDataException)
+        {
+            MessageBox.Show(this, $"Couldn't import that file:\n{ex.Message}", "Import device", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        ImportIntoDevice(device, imported);
+        MessageBox.Show(this, $"Imported '{imported.Name}' into '{device.Label}'.\n\nClick Save if you want to keep this in your saved profile.",
+            "Import device", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    /// <summary>Merges a device-scoped export (or, harmlessly, just the matching slice of a full
+    /// profile export) into the current profile, re-targeting every entry from whatever device
+    /// guid it was originally exported with onto targetDevice's actual guid - the exported file's
+    /// device may have a different DirectInput instance guid (different machine, different USB
+    /// port) than the one it's being imported into.</summary>
+    private void ImportIntoDevice(DeviceMonitorViewModel targetDevice, Profile imported)
+    {
+        var sourceGuid = FindAnyDeviceGuid(imported) ?? targetDevice.DeviceGuid;
+        var targetGuid = targetDevice.DeviceGuid;
+
+        if (imported.DeviceLabels.TryGetValue(sourceGuid, out var importedLabel))
+        {
+            _currentProfile.DeviceLabels[targetGuid] = importedLabel;
+            targetDevice.Label = importedLabel;
+        }
+
+        foreach (var entry in imported.InputLabels.Where(l => l.DeviceGuid == sourceGuid))
+            UpsertInputLabel(targetGuid, entry.Kind, entry.Index, entry.Label);
+
+        foreach (var cal in imported.AxisCalibrations.Where(c => c.DeviceGuid == sourceGuid))
+            _engine.SetCalibration(targetGuid, cal.Axis, cal.Calibration);
+
+        foreach (var excluded in imported.ExcludedControls.Where(c => c.DeviceGuid == sourceGuid))
+        {
+            if (!_currentProfile.ExcludedControls.Any(c => c.DeviceGuid == targetGuid && c.Kind == excluded.Kind && c.Index == excluded.Index))
+            {
+                _currentProfile.ExcludedControls.Add(new ExcludedControlEntry { DeviceGuid = targetGuid, Kind = excluded.Kind, Index = excluded.Index });
+            }
+        }
+
+        foreach (var binding in imported.Bindings.Where(b => b.Source.DeviceGuid == sourceGuid))
+        {
+            _currentProfile.Bindings.Add(new Binding { Source = binding.Source with { DeviceGuid = targetGuid }, Target = binding.Target });
+        }
+
+        foreach (var keyBinding in imported.KeyBindings.Where(k => k.Source.DeviceGuid == sourceGuid))
+        {
+            _currentProfile.KeyBindings.Add(new ClaudFlight.Core.Models.KeyBinding
+            {
+                Source = keyBinding.Source with { DeviceGuid = targetGuid },
+                VirtualKeyCode = keyBinding.VirtualKeyCode,
+                HoldWhilePressed = keyBinding.HoldWhilePressed,
+                PovDirection = keyBinding.PovDirection,
+                AxisThreshold = keyBinding.AxisThreshold,
+                AxisAboveThreshold = keyBinding.AxisAboveThreshold,
+            });
+        }
+
+        _engine.LoadProfile(_currentProfile);
+        RefreshDevices();
+        RebuildBindingRowsFromProfile();
+        RebuildKeyBindingRowsFromProfile();
+    }
+
+    private static Guid? FindAnyDeviceGuid(Profile profile)
+    {
+        if (profile.DeviceLabels.Count > 0) return profile.DeviceLabels.Keys.First();
+        if (profile.InputLabels.Count > 0) return profile.InputLabels[0].DeviceGuid;
+        if (profile.AxisCalibrations.Count > 0) return profile.AxisCalibrations[0].DeviceGuid;
+        if (profile.ExcludedControls.Count > 0) return profile.ExcludedControls[0].DeviceGuid;
+        if (profile.Bindings.Count > 0) return profile.Bindings[0].Source.DeviceGuid;
+        if (profile.KeyBindings.Count > 0) return profile.KeyBindings[0].Source.DeviceGuid;
+        return null;
+    }
+
     private Point _deviceDragStartPoint;
 
     /// <summary>Drag handle is just the card's header row (device name + Remove button), not the
