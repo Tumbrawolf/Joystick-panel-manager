@@ -43,6 +43,9 @@ public sealed class PhysicalDevice : IPhysicalDevice
     /// "Y Rotation") - a much better default label than the generic AxisType name.</summary>
     public IReadOnlyDictionary<AxisType, string> AxisDeviceNames => _axisDeviceNames;
 
+    private static readonly Dictionary<int, string> NoButtonNames = [];
+    public IReadOnlyDictionary<int, string> ButtonDeviceNames => NoButtonNames;
+
     internal PhysicalDevice(IDirectInputDevice8 device, DeviceInstance instance, nint windowHandle)
     {
         _device = device;

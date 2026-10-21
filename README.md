@@ -106,16 +106,25 @@ modifiers) can ever be simulated, even if a profile file were edited by hand.
 - Last-used profile / app settings: `%AppData%\ClaudFlight\settings.json`
 
 Profile files are plain JSON and safe to inspect, back up, or hand-edit if you know what you're
-doing — device identity is stored by DirectInput instance GUID, which is generally stable for the
-same physical device on the same USB port.
+doing — joysticks/game controllers are identified by their DirectInput instance GUID, and
+keyboard-/mouse-type devices (including the system mouse) by a GUID derived from their stable Raw
+Input device path. Both are generally stable for the same physical device on the same USB port.
 
 ## Known limitations
 
-- **Keyboard-emulating devices** (macro keypads/streaming panels that send keystrokes rather than
-  acting as a HID game controller) aren't supported — Windows only exposes one combined keyboard
-  stream to DirectInput, so per-device keyboard *capture* isn't possible without a much larger
-  separate input pipeline (Raw Input). Keyboard *output* (Keyboard Mapping tab) is unaffected by
-  this; it's only *reading* a keyboard-type device that's unsupported.
+- **Macro keypads and streaming panels** that emulate a keyboard or mouse (rather than acting as a
+  HID game controller) are supported via a separate Raw Input capture path, which tells each
+  physical device apart instead of lumping everything into Windows' single combined
+  keyboard/mouse stream. New keyboard-/mouse-type devices start hidden the first time they're
+  seen (restore them from the Hidden Devices list in Live Monitor), and a keypad's buttons are
+  *learned* as they're pressed rather than assumed from a fixed catalog, so press each button once
+  before mapping it.
+- Some programmable panels (streaming decks with their own configuration app, e.g. "VSD Craft"
+  style devices) don't emit any raw button-press signal at all until configured in their own
+  software, and route button presses through a proprietary USB protocol rather than standard
+  keyboard/mouse HID reports — ClaudFlight can't capture those directly. If the panel's own
+  software offers a "Hotkey" action, assigning one to each button (with the panel's software
+  running in the background) lets ClaudFlight pick up the resulting keystroke instead.
 - A gaming mouse's extra/macro buttons are often routed through the vendor's own proprietary
   software rather than standard mouse or keyboard input, and won't be seen unless the vendor
   software is configured to send them as one of those.

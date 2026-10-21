@@ -78,6 +78,27 @@ public sealed class Profile
     /// control keep working, since the mapping engine reads hardware directly and never
     /// consults this list.</summary>
     public List<ExcludedControlEntry> ExcludedControls { get; set; } = [];
+
+    /// <summary>Raw Input keyboard-type devices (macro keypads, streaming panels, or just the
+    /// regular keyboard) ever seen before, by their stable device-path-derived guid. The first
+    /// time a new one shows up it's auto-added here AND to ExcludedDeviceGuids, so Live Monitor
+    /// doesn't get flooded with every keyboard-type device on the system by default - only ones
+    /// the user explicitly restores stay visible. Devices already in this list are left alone
+    /// (so restoring one doesn't get immediately re-hidden on the next refresh).</summary>
+    public List<Guid> KnownRawInputDeviceGuids { get; set; } = [];
+
+    /// <summary>Virtual-key codes learned for each Raw Input keyboard-type device, in the order
+    /// first seen - list order is the button index everything else (bindings, calibration rows)
+    /// keys on, so this is what makes a device's button numbering stable across restarts instead
+    /// of starting back at zero known buttons every launch.</summary>
+    public List<RawInputLearnedKey> RawInputLearnedKeys { get; set; } = [];
+}
+
+/// <summary>One virtual-key code a specific Raw Input device has been seen to send.</summary>
+public sealed class RawInputLearnedKey
+{
+    public required Guid DeviceGuid { get; init; }
+    public required int VKey { get; init; }
 }
 
 /// <summary>One axis/button/POV hidden from view on an otherwise-visible device.</summary>

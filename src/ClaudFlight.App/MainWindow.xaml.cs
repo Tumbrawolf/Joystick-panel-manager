@@ -14,6 +14,7 @@ using ClaudFlight.Core.Keyboard;
 using ClaudFlight.Core.Mapping;
 using ClaudFlight.Core.Models;
 using ClaudFlight.Core.Profiles;
+using ClaudFlight.Core.RawInput;
 using ClaudFlight.Core.VJoy;
 
 namespace ClaudFlight.App;
@@ -21,6 +22,7 @@ namespace ClaudFlight.App;
 public partial class MainWindow : Window
 {
     private readonly DeviceManager _deviceManager = new();
+    private readonly RawInputKeyboardManager _rawInputManager = new();
     private readonly VJoyManager _vjoyManager = new();
     private readonly ProfileStore _profileStore = new();
     private readonly AppSettingsStore _settingsStore = new();
@@ -52,7 +54,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _engine = new MappingEngine(_deviceManager, _vjoyManager);
+        _engine = new MappingEngine(() => _deviceManager.Devices.Concat(_rawInputManager.Devices), _vjoyManager);
 
         InitializeComponent();
         DataContext = this;
@@ -66,6 +68,19 @@ public partial class MainWindow : Window
         // its normal cleanup/autosave) instead of cancelling the close to hide in the tray - doing
         // that here would fight the OS shutdown instead of just getting out of its way.
         Microsoft.Win32.SystemEvents.SessionEnding += (_, _) => _isExiting = true;
+
+        // A Raw Input keyboard-type device's button set is learned as keys are actually pressed;
+        // persist each newly-learned one immediately (so it survives even if the app closes before
+        // an explicit Save) and refresh so the new button shows up right away instead of only
+        // after the next manual "Refresh Devices" click.
+        _rawInputManager.KeyLearned += (deviceGuid, vkey) =>
+        {
+            if (!_currentProfile.RawInputLearnedKeys.Any(k => k.DeviceGuid == deviceGuid && k.VKey == vkey))
+            {
+                _currentProfile.RawInputLearnedKeys.Add(new RawInputLearnedKey { DeviceGuid = deviceGuid, VKey = vkey });
+            }
+            RefreshDevices();
+        };
     }
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
@@ -83,6 +98,14 @@ public partial class MainWindow : Window
         {
             try { _currentProfile = _profileStore.Load(lastName); }
             catch (IOException) { /* profile file missing/moved; fall back to a blank profile */ }
+        }
+
+        // Restore each Raw Input device's learned button set before the first refresh, so its
+        // button count/numbering is already correct instead of starting at zero known buttons
+        // and waiting for every key to be pressed again this session.
+        foreach (var group in _currentProfile.RawInputLearnedKeys.GroupBy(k => k.DeviceGuid))
+        {
+            _rawInputManager.SeedKnownKeys(group.Key, group.Select(k => k.VKey));
         }
 
         _engine.LoadProfile(_currentProfile);
@@ -118,6 +141,7 @@ public partial class MainWindow : Window
 
         _engine.LoadProfile(new Profile());
         _deviceManager.Dispose();
+        _rawInputManager.Dispose();
         _vjoyManager.Dispose();
         _trayIcon?.Dispose();
     }
@@ -198,10 +222,22 @@ public partial class MainWindow : Window
 
         var handle = new WindowInteropHelper(this).EnsureHandle();
         _deviceManager.Refresh(handle);
+        _rawInputManager.Refresh();
+
+        // Raw Input keyboard-type devices (the real keyboard, any macro pad/streaming panel)
+        // start hidden the first time they're ever seen, so Live Monitor isn't flooded with every
+        // keyboard-type device on the system - restore just the ones actually wanted via the
+        // existing Hidden devices dropdown. Devices already known are left as the user has them.
+        foreach (var rawDevice in _rawInputManager.Devices)
+        {
+            if (_currentProfile.KnownRawInputDeviceGuids.Contains(rawDevice.InstanceGuid)) continue;
+            _currentProfile.KnownRawInputDeviceGuids.Add(rawDevice.InstanceGuid);
+            _currentProfile.ExcludedDeviceGuids.Add(rawDevice.InstanceGuid);
+        }
 
         HiddenDevices.Clear();
         var visible = new List<DeviceMonitorViewModel>();
-        foreach (var device in _deviceManager.Devices)
+        foreach (var device in _deviceManager.Devices.Concat(_rawInputManager.Devices))
         {
             var label = _currentProfile.DeviceLabels.GetValueOrDefault(device.InstanceGuid, device.Name);
 
@@ -226,12 +262,13 @@ public partial class MainWindow : Window
             }
             for (var i = 0; i < device.ButtonCount; i++)
             {
+                var defaultButtonLabel = device.ButtonDeviceNames.GetValueOrDefault(i, $"{i + 1}");
                 if (IsControlExcluded(device.InstanceGuid, ControlKind.Button, i))
                 {
-                    vm.HiddenControls.Add(new HiddenControlViewModel(ControlKind.Button, i, GetSavedLabel(device.InstanceGuid, ControlKind.Button, i, $"{i + 1}")));
+                    vm.HiddenControls.Add(new HiddenControlViewModel(ControlKind.Button, i, GetSavedLabel(device.InstanceGuid, ControlKind.Button, i, defaultButtonLabel)));
                     continue;
                 }
-                vm.Buttons.Add(new ButtonReadingViewModel(device.InstanceGuid, i));
+                vm.Buttons.Add(new ButtonReadingViewModel(device.InstanceGuid, i) { Label = defaultButtonLabel });
             }
             for (var i = 0; i < device.PovCount; i++)
             {
@@ -585,6 +622,61 @@ public partial class MainWindow : Window
 
         Devices.Move(oldIndex, newIndex);
         PersistDeviceOrder();
+    }
+
+    private Point _buttonDragStartPoint;
+
+    /// <summary>Only meaningful for Raw Input keyboard-type devices (where button order is just
+    /// discovery order and can be fixed up); harmless no-op if dragged elsewhere or dropped on a
+    /// device whose button order isn't reorderable (ButtonLamp_Drop checks that).</summary>
+    private void ButtonLamp_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _buttonDragStartPoint = e.GetPosition(null);
+    }
+
+    private void ButtonLamp_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (e.LeftButton != MouseButtonState.Pressed) return;
+        if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel button } element) return;
+        if (_rawInputManager.GetKnownVKeys(button.DeviceGuid).Count == 0) return; // not reorderable
+
+        var current = e.GetPosition(null);
+        if (Math.Abs(current.X - _buttonDragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(current.Y - _buttonDragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        DragDrop.DoDragDrop(element, button, DragDropEffects.Move);
+    }
+
+    private void ButtonLamp_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(typeof(ButtonReadingViewModel))) return;
+        if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel targetButton }) return;
+        if (e.Data.GetData(typeof(ButtonReadingViewModel)) is not ButtonReadingViewModel draggedButton) return;
+        if (ReferenceEquals(draggedButton, targetButton)) return;
+        if (draggedButton.DeviceGuid != targetButton.DeviceGuid) return;
+
+        var deviceGuid = draggedButton.DeviceGuid;
+        var currentOrder = _rawInputManager.GetKnownVKeys(deviceGuid);
+        if (currentOrder.Count == 0) return; // not a reorderable Raw Input keyboard device
+
+        var oldIndex = draggedButton.Index;
+        var newIndex = targetButton.Index;
+        if (oldIndex < 0 || oldIndex >= currentOrder.Count || newIndex < 0 || newIndex >= currentOrder.Count) return;
+
+        var reordered = currentOrder.ToList();
+        var moved = reordered[oldIndex];
+        reordered.RemoveAt(oldIndex);
+        reordered.Insert(newIndex, moved);
+
+        _rawInputManager.ReorderKnownKeys(deviceGuid, reordered);
+
+        _currentProfile.RawInputLearnedKeys.RemoveAll(k => k.DeviceGuid == deviceGuid);
+        foreach (var vkey in reordered) _currentProfile.RawInputLearnedKeys.Add(new RawInputLearnedKey { DeviceGuid = deviceGuid, VKey = vkey });
+
+        RefreshDevices();
     }
 
     private void AddBinding_Click(object sender, RoutedEventArgs e)

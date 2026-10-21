@@ -123,9 +123,12 @@
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type vm:ButtonReadingViewModel}">
-                                                    <StackPanel Margin="2" Width="58" ContextMenu="{StaticResource HideControlMenu}">
+                                                    <StackPanel Margin="2" Width="58" ContextMenu="{StaticResource HideControlMenu}"
+                                                                AllowDrop="True" Drop="ButtonLamp_Drop"
+                                                                PreviewMouseLeftButtonDown="ButtonLamp_PreviewMouseLeftButtonDown"
+                                                                MouseMove="ButtonLamp_MouseMove">
                                                         <Border Style="{StaticResource ButtonLampStyle}" HorizontalAlignment="Center"
-                                                                ToolTip="This is the number to type into Mapping's Source #/Target # field for this button">
+                                                                ToolTip="This is the number to type into Mapping's Source #/Target # field for this button. On a Raw Input keyboard device, drag to reorder.">
                                                             <TextBlock Text="{Binding DisplayNumber}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="10" />
                                                         </Border>
                                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontSize="9" TextAlignment="Center"

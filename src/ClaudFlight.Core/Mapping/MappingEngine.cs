@@ -10,7 +10,7 @@ namespace ClaudFlight.Core.Mapping;
 /// simulated keyboard input.</summary>
 public sealed class MappingEngine
 {
-    private readonly DeviceManager _devices;
+    private readonly Func<IEnumerable<IPhysicalDevice>> _deviceSource;
     private readonly VJoyManager _vjoy;
     private Profile _profile = new();
     private Dictionary<(Guid, AxisType), AxisCalibration> _calibrations = [];
@@ -21,9 +21,12 @@ public sealed class MappingEngine
     /// on for that session.</summary>
     public bool KeyboardInjectionEnabled { get; set; }
 
-    public MappingEngine(DeviceManager devices, VJoyManager vjoy)
+    /// <param name="deviceSource">Called once per Tick to get the current set of pollable devices.
+    /// A delegate rather than a single DeviceManager so callers can combine multiple device
+    /// sources (DirectInput devices, the mouse, Raw Input keyboard devices) transparently.</param>
+    public MappingEngine(Func<IEnumerable<IPhysicalDevice>> deviceSource, VJoyManager vjoy)
     {
-        _devices = devices;
+        _deviceSource = deviceSource;
         _vjoy = vjoy;
     }
 
@@ -67,7 +70,7 @@ public sealed class MappingEngine
         // Poll each device independently: one device throwing (or hanging on a driver quirk)
         // should never prevent every other device's state from updating this tick.
         var snapshots = new Dictionary<Guid, JoystickSnapshot>();
-        foreach (var device in _devices.Devices)
+        foreach (var device in _deviceSource())
         {
             JoystickSnapshot snapshot;
             try
