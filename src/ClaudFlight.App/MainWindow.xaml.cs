@@ -107,6 +107,7 @@ public partial class MainWindow : Window
         {
             _rawInputManager.SeedKnownKeys(group.Key, group.Select(k => k.VKey));
         }
+        _rawInputManager.SeedAxisModes(_currentProfile.AxisModes);
 
         _engine.LoadProfile(_currentProfile);
         RefreshDevices();
@@ -249,6 +250,13 @@ public partial class MainWindow : Window
 
             var vm = new DeviceMonitorViewModel(device.InstanceGuid, device.Name) { Label = label, PresentAxes = device.PresentAxes };
 
+            if (device is RawInputMouseDevice or RawInputCombinedDevice)
+            {
+                AddAxisModeRow(vm, device.InstanceGuid, AxisType.X, "X Movement");
+                AddAxisModeRow(vm, device.InstanceGuid, AxisType.Y, "Y Movement");
+                AddAxisModeRow(vm, device.InstanceGuid, AxisType.Z, "Wheel / Dial");
+            }
+
             foreach (var axis in device.PresentAxes)
             {
                 var defaultLabel = device.AxisDeviceNames.GetValueOrDefault(axis, axis.ToString());
@@ -297,6 +305,38 @@ public partial class MainWindow : Window
         RebuildCalibrationRows();
         RefreshMappingFormOptions();
         RefreshKeySourceControlOptions();
+    }
+
+    /// <summary>Builds one axis-mode row (see AxisModeRowViewModel) for a Raw Input mouse-style
+    /// device's native axis, pre-selecting whatever option matches its currently configured mode.</summary>
+    private void AddAxisModeRow(DeviceMonitorViewModel vm, Guid deviceGuid, AxisType nativeAxis, string label)
+    {
+        var row = new AxisModeRowViewModel(deviceGuid, nativeAxis, label);
+        var current = _rawInputManager.GetAxisMode(deviceGuid, nativeAxis);
+        row.SelectedOption = AxisModeRowViewModel.Options.FirstOrDefault(o =>
+            o.Mode == current.Mode && (o.Mode == AxisReportMode.Buttons || o.ReportAs == current.ReportAs))
+            ?? AxisModeRowViewModel.Options[0];
+        vm.AxisModeRows.Add(row);
+    }
+
+    /// <summary>Persists a user-driven change to how a Raw Input mouse-style device's native axis
+    /// is exposed. Guarded by e.RemovedItems: the ComboBox also raises this when a row's
+    /// SelectedOption is first set from code (building the row in AddAxisModeRow above), which has
+    /// no previous selection to report as removed - only react to an actual change away from some
+    /// prior selection, or setting the initial value here would recurse into RefreshDevices()
+    /// forever as each rebuild re-triggers the "initial" selection on its brand new ComboBoxes.</summary>
+    private void AxisMode_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.RemovedItems.Count == 0) return;
+        if (sender is not FrameworkElement { DataContext: AxisModeRowViewModel row }) return;
+        if (row.SelectedOption is not { } option) return;
+
+        _rawInputManager.SetAxisMode(row.DeviceGuid, row.NativeAxis, option.Mode, option.ReportAs);
+
+        _currentProfile.AxisModes.RemoveAll(m => m.DeviceGuid == row.DeviceGuid && m.NativeAxis == row.NativeAxis);
+        _currentProfile.AxisModes.Add(new AxisModeEntry { DeviceGuid = row.DeviceGuid, NativeAxis = row.NativeAxis, Mode = option.Mode, ReportAs = option.ReportAs });
+
+        RefreshDevices();
     }
 
     /// <summary>Captures the current on-screen device card order into the profile so drag/drop

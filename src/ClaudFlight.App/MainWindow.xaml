@@ -97,6 +97,25 @@
                                         </Grid>
                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontWeight="Bold" Margin="0,0,0,8" />
 
+                                        <ItemsControl ItemsSource="{Binding AxisModeRows}" Margin="0,0,0,8"
+                                                      Visibility="{Binding AxisModeRows.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate DataType="{x:Type vm:AxisModeRowViewModel}">
+                                                    <Grid Margin="0,2"
+                                                          ToolTip="How this control's raw movement is exposed - as a continuous axis (optionally under a different axis slot) or as two buttons, one per direction.">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="90" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBlock Grid.Column="0" Text="{Binding NativeLabel}" FontSize="11" VerticalAlignment="Center" />
+                                                        <ComboBox Grid.Column="1" ItemsSource="{x:Static vm:AxisModeRowViewModel.Options}"
+                                                                  SelectedItem="{Binding SelectedOption}" FontSize="11"
+                                                                  SelectionChanged="AxisMode_SelectionChanged" />
+                                                    </Grid>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
                                         <ItemsControl ItemsSource="{Binding Axes}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type vm:AxisReadingViewModel}">

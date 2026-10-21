@@ -8,11 +8,19 @@ namespace ClaudFlight.Core.Devices;
 /// while its jog dial reports as mouse wheel movement - sometimes on more than one keyboard-type
 /// interface at once) - RawInputKeyboardManager.Refresh merges these into one of these instead of
 /// showing up as separate, unrelated-looking device cards. Buttons are each keyboard interface's
-/// learned buttons, in order, followed by the mouse interface's 5 standard buttons; axes are the
-/// mouse interface's X/Y/wheel.</summary>
+/// learned buttons, in order, followed by the mouse interface's 5 standard buttons, followed by two
+/// buttons per native mouse axis that's in Buttons mode (see RawInputMouseDevice/
+/// RawInputKeyboardManager.GetAxisMode); axes are whichever native mouse axes (X/Y/wheel) are still
+/// in Axis mode, under their (possibly relabeled) AxisType slot.</summary>
 public sealed class RawInputCombinedDevice : IPhysicalDevice
 {
-    private static readonly AxisType[] Axes = [AxisType.X, AxisType.Y, AxisType.Z];
+    private static readonly AxisType[] NativeAxes = [AxisType.X, AxisType.Y, AxisType.Z];
+    private static readonly Dictionary<AxisType, string> NativeAxisNames = new()
+    {
+        [AxisType.X] = "X",
+        [AxisType.Y] = "Y",
+        [AxisType.Z] = "Wheel",
+    };
     private static readonly string[] MouseButtonNames = ["Left", "Right", "Middle", "X1", "X2"];
 
     private readonly RawInputKeyboardManager _manager;
@@ -21,15 +29,37 @@ public sealed class RawInputCombinedDevice : IPhysicalDevice
 
     public Guid InstanceGuid { get; }
     public string Name { get; }
-    public int ButtonCount => _keyboardGuids.Sum(_manager.GetButtonCount) + MouseButtonNames.Length;
+    public int ButtonCount => _keyboardGuids.Sum(_manager.GetButtonCount) + MouseButtonNames.Length + AxesInButtonsMode().Count * 2;
     public int PovCount => 0;
-    public IReadOnlyList<AxisType> PresentAxes => Axes;
-    public IReadOnlyDictionary<AxisType, string> AxisDeviceNames { get; } = new Dictionary<AxisType, string>
+
+    public IReadOnlyList<AxisType> PresentAxes
     {
-        [AxisType.X] = "X",
-        [AxisType.Y] = "Y",
-        [AxisType.Z] = "Wheel",
-    };
+        get
+        {
+            var seen = new List<AxisType>();
+            foreach (var native in NativeAxes)
+            {
+                var mode = _manager.GetAxisMode(InstanceGuid, native);
+                if (mode.Mode == AxisReportMode.Axis && !seen.Contains(mode.ReportAs)) seen.Add(mode.ReportAs);
+            }
+            return seen;
+        }
+    }
+
+    public IReadOnlyDictionary<AxisType, string> AxisDeviceNames
+    {
+        get
+        {
+            var names = new Dictionary<AxisType, string>();
+            foreach (var native in NativeAxes)
+            {
+                var mode = _manager.GetAxisMode(InstanceGuid, native);
+                if (mode.Mode == AxisReportMode.Axis) names[mode.ReportAs] = NativeAxisNames[native];
+            }
+            return names;
+        }
+    }
+
     public IReadOnlyDictionary<int, string> ButtonDeviceNames => BuildButtonNames();
     public bool IsLikelyGameController => true;
 
@@ -44,12 +74,26 @@ public sealed class RawInputCombinedDevice : IPhysicalDevice
 
     public JoystickSnapshot Poll()
     {
-        var axes = new Dictionary<AxisType, int>
+        var deltas = new Dictionary<AxisType, int>
         {
             [AxisType.X] = _manager.DrainXDelta(_mouseGuid),
             [AxisType.Y] = _manager.DrainYDelta(_mouseGuid),
             [AxisType.Z] = _manager.DrainWheelDelta(_mouseGuid),
         };
+
+        var axes = new Dictionary<AxisType, int>();
+        var extraButtons = new List<bool>();
+        foreach (var native in NativeAxes)
+        {
+            var mode = _manager.GetAxisMode(InstanceGuid, native);
+            var delta = deltas[native];
+            if (mode.Mode == AxisReportMode.Axis) axes[mode.ReportAs] = delta;
+            else
+            {
+                extraButtons.Add(delta > 0);
+                extraButtons.Add(delta < 0);
+            }
+        }
 
         var buttons = new bool[ButtonCount];
         var offset = 0;
@@ -60,6 +104,8 @@ public sealed class RawInputCombinedDevice : IPhysicalDevice
             offset += count;
         }
         for (var i = 0; i < MouseButtonNames.Length; i++) buttons[offset + i] = _manager.IsMouseButtonPressed(_mouseGuid, i);
+        offset += MouseButtonNames.Length;
+        for (var i = 0; i < extraButtons.Count; i++) buttons[offset + i] = extraButtons[i];
 
         return new JoystickSnapshot { Axes = axes, Buttons = buttons, PointOfViews = [] };
     }
@@ -68,6 +114,9 @@ public sealed class RawInputCombinedDevice : IPhysicalDevice
     {
         // No per-device native resource: the manager owns the raw input window and device state.
     }
+
+    private List<AxisType> AxesInButtonsMode() =>
+        NativeAxes.Where(a => _manager.GetAxisMode(InstanceGuid, a).Mode == AxisReportMode.Buttons).ToList();
 
     private Dictionary<int, string> BuildButtonNames()
     {
@@ -82,6 +131,15 @@ public sealed class RawInputCombinedDevice : IPhysicalDevice
             offset += _manager.GetButtonCount(keyboardGuid);
         }
         for (var i = 0; i < MouseButtonNames.Length; i++) names[offset + i] = MouseButtonNames[i];
+        offset += MouseButtonNames.Length;
+
+        foreach (var native in AxesInButtonsMode())
+        {
+            var label = NativeAxisNames[native];
+            names[offset] = $"{label} +";
+            names[offset + 1] = $"{label} -";
+            offset += 2;
+        }
         return names;
     }
 }

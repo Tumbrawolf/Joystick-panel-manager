@@ -92,6 +92,11 @@ public sealed class Profile
     /// keys on, so this is what makes a device's button numbering stable across restarts instead
     /// of starting back at zero known buttons every launch.</summary>
     public List<RawInputLearnedKey> RawInputLearnedKeys { get; set; } = [];
+
+    /// <summary>Per-device overrides for how a Raw Input mouse-style device's native axes are
+    /// exposed (see AxisReportMode) - e.g. relabeling a dial's wheel axis to a different slot, or
+    /// turning it into two buttons instead of a continuous axis.</summary>
+    public List<AxisModeEntry> AxisModes { get; set; } = [];
 }
 
 /// <summary>One virtual-key code a specific Raw Input device has been seen to send.</summary>
@@ -107,4 +112,30 @@ public sealed class ExcludedControlEntry
     public required Guid DeviceGuid { get; init; }
     public required ControlKind Kind { get; init; }
     public required int Index { get; init; }
+}
+
+/// <summary>How a Raw Input mouse-style device's native axis (its X/Y movement or wheel, each
+/// reported as a relative per-poll delta) should be exposed: as a continuous axis - optionally
+/// under a different AxisType slot than its native one, e.g. exposing a dial's "wheel" delta as
+/// Slider0 so it calibrates/binds like a rotary control instead - or converted into two buttons
+/// (one that pulses true for a poll when the delta goes positive, one for negative), which suits a
+/// detent-based dial better than a continuous axis for things like flap/trim step actions.</summary>
+public enum AxisReportMode
+{
+    Axis,
+    Buttons,
+}
+
+/// <summary>Per-device override for how one native axis (see AxisReportMode) is exposed. Entries
+/// are only meaningful for Raw Input mouse-style devices (RawInputMouseDevice/
+/// RawInputCombinedDevice); other device types always report axes as-is.</summary>
+public sealed class AxisModeEntry
+{
+    public required Guid DeviceGuid { get; init; }
+    public required AxisType NativeAxis { get; init; }
+    public AxisReportMode Mode { get; init; } = AxisReportMode.Axis;
+
+    /// <summary>Axis mode only: which AxisType slot this native axis's value is reported under -
+    /// defaults to NativeAxis itself (no relabeling).</summary>
+    public AxisType ReportAs { get; init; }
 }

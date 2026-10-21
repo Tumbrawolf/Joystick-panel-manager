@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using ClaudFlight.Core.Devices;
+using ClaudFlight.Core.Models;
 
 namespace ClaudFlight.Core.RawInput;
 
@@ -49,6 +50,10 @@ public sealed class RawInputKeyboardManager : IDisposable
     private readonly Dictionary<Guid, int> _wheelDeltaByDevice = [];
     private readonly Dictionary<Guid, bool[]> _mouseButtonsByDevice = [];
 
+    /// <summary>Per (device, native axis) override of how that axis is exposed - see
+    /// AxisReportMode. Absent entries default to reporting as-is under their native AxisType.</summary>
+    private readonly Dictionary<(Guid DeviceGuid, AxisType NativeAxis), AxisModeEntry> _axisModes = [];
+
     /// <summary>Fires when a device's button set grows - a brand new key was seen from it for the
     /// first time. Subscribers should persist (deviceGuid, vkey) so SeedKnownKeys can restore the
     /// same button numbering next launch.</summary>
@@ -62,6 +67,28 @@ public sealed class RawInputKeyboardManager : IDisposable
     }
 
     public IReadOnlyList<IPhysicalDevice> Devices { get; private set; } = [];
+
+    /// <summary>Pre-populates axis-mode overrides from previously-saved data - called once at
+    /// startup, same pattern as SeedKnownKeys.</summary>
+    public void SeedAxisModes(IEnumerable<AxisModeEntry> entries)
+    {
+        foreach (var entry in entries) _axisModes[(entry.DeviceGuid, entry.NativeAxis)] = entry;
+    }
+
+    /// <summary>Sets how one device's native axis should be exposed (see AxisReportMode) - called
+    /// when the user changes the selection in Live Monitor. Passing Mode=Axis with ReportAs equal
+    /// to nativeAxis clears any relabeling back to default.</summary>
+    public void SetAxisMode(Guid deviceGuid, AxisType nativeAxis, AxisReportMode mode, AxisType reportAs)
+    {
+        _axisModes[(deviceGuid, nativeAxis)] = new AxisModeEntry { DeviceGuid = deviceGuid, NativeAxis = nativeAxis, Mode = mode, ReportAs = reportAs };
+    }
+
+    /// <summary>The current mode for one device's native axis - defaults to reporting as-is
+    /// (Mode=Axis, ReportAs=nativeAxis) when no override has been set.</summary>
+    public AxisModeEntry GetAxisMode(Guid deviceGuid, AxisType nativeAxis) =>
+        _axisModes.TryGetValue((deviceGuid, nativeAxis), out var entry)
+            ? entry
+            : new AxisModeEntry { DeviceGuid = deviceGuid, NativeAxis = nativeAxis, Mode = AxisReportMode.Axis, ReportAs = nativeAxis };
 
     /// <summary>Pre-populates a device's known buttons from previously-saved data, before it's
     /// necessarily been seen again this session - called once at startup per device so a device's

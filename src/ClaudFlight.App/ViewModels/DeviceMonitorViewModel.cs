@@ -22,6 +22,11 @@ public sealed class DeviceMonitorViewModel(Guid deviceGuid, string deviceName) :
     public ObservableCollection<ButtonReadingViewModel> Buttons { get; } = [];
     public ObservableCollection<PovReadingViewModel> Povs { get; } = [];
 
+    /// <summary>Raw Input mouse-style devices only (RawInputMouseDevice/RawInputCombinedDevice):
+    /// one row per native axis (X/Y movement, wheel) letting the user choose how it's exposed -
+    /// see AxisModeRowViewModel. Empty for every other device type.</summary>
+    public ObservableCollection<AxisModeRowViewModel> AxisModeRows { get; } = [];
+
     /// <summary>Axes/buttons/POVs hidden from view on this device - listed so they can be restored.</summary>
     public ObservableCollection<HiddenControlViewModel> HiddenControls { get; } = [];
 
@@ -39,14 +44,17 @@ public sealed class DeviceMonitorViewModel(Guid deviceGuid, string deviceName) :
             if (snapshot.Axes.TryGetValue(axisVm.Axis, out var raw)) axisVm.Raw = raw;
         }
 
-        for (var i = 0; i < Buttons.Count && i < snapshot.Buttons.Count; i++)
+        // Match by each row's own device-level index rather than its position in this (possibly
+        // shorter) visible list - a hidden button/POV earlier in the device's control list would
+        // otherwise shift every later one's reading off by however many are hidden before it.
+        foreach (var buttonVm in Buttons)
         {
-            Buttons[i].IsPressed = snapshot.Buttons[i];
+            if (buttonVm.Index < snapshot.Buttons.Count) buttonVm.IsPressed = snapshot.Buttons[buttonVm.Index];
         }
 
-        for (var i = 0; i < Povs.Count && i < snapshot.PointOfViews.Count; i++)
+        foreach (var povVm in Povs)
         {
-            Povs[i].RawHundredthDegrees = snapshot.PointOfViews[i];
+            if (povVm.Index < snapshot.PointOfViews.Count) povVm.RawHundredthDegrees = snapshot.PointOfViews[povVm.Index];
         }
     }
 
@@ -124,6 +132,45 @@ public sealed class ButtonReadingViewModel(Guid deviceGuid, int index) : Observa
     {
         get => _isPressed;
         set => SetField(ref _isPressed, value);
+    }
+}
+
+/// <summary>One selectable way to expose a Raw Input mouse-style device's native axis: a
+/// continuous axis under a given AxisType slot, or two buttons (ReportAs is unused for that case -
+/// see AxisReportMode).</summary>
+public sealed record AxisModeOption(string Label, AxisReportMode Mode, AxisType ReportAs)
+{
+    public override string ToString() => Label;
+}
+
+/// <summary>One native axis (X/Y movement or wheel) on a Raw Input mouse-style device, with a
+/// dropdown of ways to expose it (see AxisModeOption) - e.g. relabeling a dial's wheel delta to a
+/// different axis slot, or converting it to two buttons better suited to step actions than a
+/// continuous scroll-style axis.</summary>
+public sealed class AxisModeRowViewModel(Guid deviceGuid, AxisType nativeAxis, string nativeLabel) : ObservableBase
+{
+    public Guid DeviceGuid { get; } = deviceGuid;
+    public AxisType NativeAxis { get; } = nativeAxis;
+    public string NativeLabel { get; } = nativeLabel;
+
+    public static IReadOnlyList<AxisModeOption> Options { get; } =
+    [
+        new("Axis: X", AxisReportMode.Axis, AxisType.X),
+        new("Axis: Y", AxisReportMode.Axis, AxisType.Y),
+        new("Axis: Z", AxisReportMode.Axis, AxisType.Z),
+        new("Axis: Rotation X", AxisReportMode.Axis, AxisType.RotationX),
+        new("Axis: Rotation Y", AxisReportMode.Axis, AxisType.RotationY),
+        new("Axis: Rotation Z", AxisReportMode.Axis, AxisType.RotationZ),
+        new("Axis: Slider 1", AxisReportMode.Axis, AxisType.Slider0),
+        new("Axis: Slider 2", AxisReportMode.Axis, AxisType.Slider1),
+        new("Two buttons (+/-)", AxisReportMode.Buttons, AxisType.X),
+    ];
+
+    private AxisModeOption _selectedOption = Options[0];
+    public AxisModeOption SelectedOption
+    {
+        get => _selectedOption;
+        set => SetField(ref _selectedOption, value);
     }
 }
 
