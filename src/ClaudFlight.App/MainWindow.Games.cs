@@ -21,6 +21,10 @@ public partial class MainWindow
     /// <summary>True while the list of running programs is being read in the background.</summary>
     private bool _checkingGames;
 
+    /// <summary>True when keyboard keys were turned on because the running game's entry asks for
+    /// them, so they go off again when it closes.</summary>
+    private bool _keysOnForGame;
+
     private async void CheckGameProfiles()
     {
         if (_checkingGames) return;
@@ -73,9 +77,17 @@ public partial class MainWindow
             var previous = _profileBeforeGame;
             _activeGameProcess = null;
             _profileBeforeGame = null;
+            var keysOff = _keysOnForGame && KeyboardKeysOn;
+            _keysOnForGame = false;
+            if (keysOff) SetKeyboardKeys(false);
+            var keysNote = keysOff ? " Keyboard keys are off again." : "";
             if (previous is not null && previous != _currentProfile.Name && _profileStore.Exists(previous))
             {
-                SwitchToProfile(previous, $"{game} closed - back to profile '{previous}'.");
+                SwitchToProfile(previous, $"{game} closed - back to profile '{previous}'.{keysNote}");
+            }
+            else if (keysOff)
+            {
+                Notify($"{game} closed.{keysNote}");
             }
             return;
         }
@@ -85,13 +97,41 @@ public partial class MainWindow
             if (!running.Contains(entry.ProcessName) || !_profileStore.Exists(entry.ProfileName)) continue;
 
             _activeGameProcess = entry.ProcessName;
-            if (string.Equals(entry.ProfileName, _currentProfile.Name, StringComparison.OrdinalIgnoreCase)) return; // already on it
+            var keysOn = ApplyGameKeys(entry);
+            var keysNote = keysOn ? " Keyboard keys are on." : "";
+            if (string.Equals(entry.ProfileName, _currentProfile.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                // Already on its profile.
+                if (keysOn) Notify($"{entry.ProcessName} started.{keysNote}");
+                return;
+            }
 
             _profileBeforeGame = _currentProfile.Name;
-            SwitchToProfile(entry.ProfileName, $"{entry.ProcessName} started - switched to profile '{entry.ProfileName}'.");
+            SwitchToProfile(entry.ProfileName, $"{entry.ProcessName} started - switched to profile '{entry.ProfileName}'.{keysNote}");
             return;
         }
     }
+
+    /// <summary>Turns keyboard keys on for the running game if its entry asks for them (or back off,
+    /// should the entry stop asking while it runs). True if this turned them on.</summary>
+    private bool ApplyGameKeys(ClaudFlight.Core.Profiles.GameProfileEntry entry)
+    {
+        if (entry.KeyboardKeysOn && !KeyboardKeysOn)
+        {
+            SetKeyboardKeys(true);
+            _keysOnForGame = true;
+            return true;
+        }
+        if (!entry.KeyboardKeysOn && _keysOnForGame)
+        {
+            _keysOnForGame = false;
+            if (KeyboardKeysOn) SetKeyboardKeys(false);
+        }
+        return false;
+    }
+
+    private void Notify(string message) =>
+        _trayIcon?.ShowBalloonTip(3000, "ClaudFlight", message, System.Windows.Forms.ToolTipIcon.Info);
 
     private void SwitchToProfile(string name, string message)
     {
@@ -104,6 +144,6 @@ public partial class MainWindow
         {
             return;
         }
-        _trayIcon?.ShowBalloonTip(3000, "ClaudFlight", message, System.Windows.Forms.ToolTipIcon.Info);
+        Notify(message);
     }
 }

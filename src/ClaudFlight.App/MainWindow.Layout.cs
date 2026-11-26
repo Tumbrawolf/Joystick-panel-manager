@@ -69,6 +69,7 @@ public partial class MainWindow
         LayoutDeletePageButton.IsEnabled = hasPage;
         LayoutAddTextButton.IsEnabled = hasPage;
         LayoutExportImageButton.IsEnabled = hasPage;
+        LayoutPrintButton.IsEnabled = hasPage;
         LayoutClearBackgroundButton.IsEnabled = _layoutPage?.Background is not null;
 
         if (_layoutPage is { } page)
@@ -148,14 +149,14 @@ public partial class MainWindow
         foreach (var binding in _currentProfile.Bindings)
         {
             if (binding.Source.DeviceGuid != deviceGuid || binding.Source.Kind != kind || binding.Source.Index != index || binding.Part != part) continue;
-            outputs.Add(new RemapOutput(DescribeBinding(binding), binding, binding.Shifted));
+            outputs.Add(new RemapOutput(DescribeBinding(binding), binding, binding.Shifted, binding.ModeName, ConflictNote(binding)));
         }
 
         foreach (var keyBinding in _currentProfile.KeyBindings)
         {
             if (keyBinding.Source.DeviceGuid != deviceGuid || keyBinding.Source.Kind != kind || keyBinding.Source.Index != index) continue;
             if (InputParts.Of(keyBinding) != part) continue;
-            outputs.Add(new RemapOutput(DescribeKeyBinding(keyBinding), keyBinding, keyBinding.Shifted));
+            outputs.Add(new RemapOutput(DescribeKeyBinding(keyBinding), keyBinding, keyBinding.Shifted, keyBinding.ModeName, ConflictNote(keyBinding)));
         }
 
         return outputs;
@@ -183,6 +184,7 @@ public partial class MainWindow
             return binding.Nudge switch
             {
                 AxisNudge.Center => $"{axis} to center",
+                AxisNudge.SetTo => $"{axis} to {percent}",
                 _ => $"{axis} {(binding.Nudge == AxisNudge.Increase ? "▲" : "▼")} {percent}{(binding.Mode == SwitchMode.Hold ? "/s" : " per press")}",
             };
         }
@@ -199,7 +201,7 @@ public partial class MainWindow
             {
                 SwitchMode.PulseOnPress => " (pulse)",
                 SwitchMode.PulseOnBoth => " (pulse on/off)",
-                SwitchMode.Latch => " (latch)",
+                SwitchMode.Latch => binding.SayOn is not null || binding.SayOff is not null ? " (latch, spoken)" : " (latch)",
                 _ => "",
             };
         }
@@ -286,13 +288,17 @@ public partial class MainWindow
     private string DescribeMappings(Guid deviceGuid, ControlKind kind, int index, InputPart part)
     {
         var remaps = GetRemaps(deviceGuid, kind, index, part);
-        var parts = remaps.Where(r => !r.Shifted).Select(r => r.Description)
-            .Concat(remaps.Where(r => r.Shifted).Select(r => "⇧ " + r.Description))
+        // Any-mode mappings first, then each mode's (named in front).
+        var parts = remaps.OrderBy(r => r.ModeName is not null).ThenBy(r => r.ModeName, StringComparer.OrdinalIgnoreCase)
+            .Where(r => !r.Shifted).Select(r => ModePrefix(r) + r.Description)
+            .Concat(remaps.Where(r => r.Shifted).Select(r => "⇧ " + ModePrefix(r) + r.Description))
             .ToList();
         var slot = new RemapSlot(deviceGuid, kind, index, part, "", "");
         if (IsShiftControl(slot)) parts.Insert(0, "SHIFT");
         return string.Join(", ", parts);
     }
+
+    private static string ModePrefix(RemapOutput remap) => remap.ModeName is null ? "" : $"{remap.ModeName}: ";
 
     internal void AddRemap(object output)
     {
@@ -333,6 +339,7 @@ public partial class MainWindow
     /// Mappings list, and the markers' mapping text.</summary>
     private void AfterRemapsChanged()
     {
+        RefreshConflicts();
         _engine.LoadProfile(_currentProfile);
         RebuildLayoutMarkers();
         RebuildMappingList();
@@ -489,6 +496,58 @@ public partial class MainWindow
         };
         if (dialog.ShowDialog(this) != true) return;
 
+        try
+        {
+            if (RenderLayoutPage() is not { } picture) return;
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(picture));
+            using var file = File.Create(dialog.FileName);
+            encoder.Save(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, $"Couldn't save the picture:\n{ex.Message}", "Export image", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Prints the page as a reference card, turned and scaled to fit the paper. Picking
+    /// "Microsoft Print to PDF" saves it as a PDF instead.</summary>
+    private void LayoutPrint_Click(object sender, RoutedEventArgs e)
+    {
+        if (_layoutPage is null) return;
+        var dialog = new PrintDialog();
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            if (RenderLayoutPage() is not { } picture) return;
+            const double margin = 36; // half an inch
+            var pageWidth = dialog.PrintableAreaWidth;
+            var pageHeight = dialog.PrintableAreaHeight;
+            var (width, height) = (picture.Width, picture.Height);
+            var turn = width > height != pageWidth > pageHeight; // a wide picture on upright paper goes sideways
+            var (fitWidth, fitHeight) = turn ? (height, width) : (width, height);
+            var scale = Math.Min((pageWidth - 2 * margin) / fitWidth, (pageHeight - 2 * margin) / fitHeight);
+
+            var visual = new DrawingVisual();
+            using (var context = visual.RenderOpen())
+            {
+                context.PushTransform(new TranslateTransform(pageWidth / 2, pageHeight / 2));
+                if (turn) context.PushTransform(new RotateTransform(90));
+                context.PushTransform(new ScaleTransform(scale, scale));
+                context.DrawImage(picture, new Rect(-width / 2, -height / 2, width, height));
+            }
+            dialog.PrintVisual(visual, $"ClaudFlight - {_layoutPage.Name}");
+        }
+        catch (Exception ex) when (ex is System.Printing.PrintSystemException or InvalidOperationException)
+        {
+            MessageBox.Show(this, $"Couldn't print the page:\n{ex.Message}", "Print", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>The current page as it looks locked (picture, markers, mappings and text, no hint),
+    /// cropped to the picture plus the padding around it, or null if there's nothing to draw.</summary>
+    private System.Windows.Media.Imaging.BitmapSource? RenderLayoutPage()
+    {
         // Show the locked look (plain text labels, no hint) while rendering.
         foreach (var item in LayoutItems) item.IsEditing = false;
         var hintVisibility = LayoutHintText.Visibility;
@@ -499,7 +558,7 @@ public partial class MainWindow
         try
         {
             var picture = LayoutPictureRect();
-            if (picture.IsEmpty) return;
+            if (picture.IsEmpty) return null;
             var area = new Rect(0, 0, LayoutArea.ActualWidth, LayoutArea.ActualHeight);
             // Keep the padding around the picture so markers sitting on its edge aren't cut in half.
             var crop = Rect.Intersect(new Rect(picture.X - LayoutPadding, picture.Y - LayoutPadding,
@@ -524,14 +583,9 @@ public partial class MainWindow
             var pixels = new Int32Rect((int)(crop.X * scale), (int)(crop.Y * scale),
                 Math.Min((int)(crop.Width * scale), full.PixelWidth - (int)(crop.X * scale)),
                 Math.Min((int)(crop.Height * scale), full.PixelHeight - (int)(crop.Y * scale)));
-            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
-            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(new System.Windows.Media.Imaging.CroppedBitmap(full, pixels)));
-            using var file = File.Create(dialog.FileName);
-            encoder.Save(file);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            MessageBox.Show(this, $"Couldn't save the picture:\n{ex.Message}", "Export image", MessageBoxButton.OK, MessageBoxImage.Error);
+            var cropped = new System.Windows.Media.Imaging.CroppedBitmap(full, pixels);
+            cropped.Freeze();
+            return cropped;
         }
         finally
         {

@@ -44,7 +44,14 @@ public sealed class MappingEngine
     private readonly Func<double> _clock;
     private Profile _profile = new();
     private Dictionary<(Guid, AxisType), AxisCalibration> _calibrations = [];
+
+    /// <summary>Inputs with shift-layer mappings that apply with no mode active (any-mode ones),
+    /// and per mode, inputs with shift-layer mappings of that mode.</summary>
     private HashSet<(Guid, ControlKind, int, InputPart)> _shiftedSlots = [];
+    private Dictionary<string, HashSet<(Guid, ControlKind, int, InputPart)>> _shiftedModeSlots = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Per mode, the inputs with mappings of that mode (which then replace their any-mode ones).</summary>
+    private Dictionary<string, HashSet<(Guid, ControlKind, int, InputPart)>> _modeSlots = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Inputs with a double-tap mapping: their short-press mappings wait to rule out a double tap.</summary>
     private HashSet<(Guid, ControlKind, int, InputPart)> _doubleTapSlots = [];
@@ -88,6 +95,23 @@ public sealed class MappingEngine
     private readonly Dictionary<(uint, VJoyAxis), double> _nudgedAxes = [];
     private double _lastTick = double.NaN;
 
+    // Test presses from the remap window: until when a button is held, and when a hat/axis test began.
+    private readonly Dictionary<(uint, int), double> _testButtons = [];
+    private readonly Dictionary<(uint, int), double> _testHats = [];
+    private readonly Dictionary<(uint, VJoyAxis), double> _testAxes = [];
+
+    /// <summary>How long a tested button is held; a tested hat spends this long on each direction.</summary>
+    public const double TestPressSeconds = 0.3;
+
+    /// <summary>How long a tested axis takes to sweep end to end and back to center.</summary>
+    public const double TestSweepSeconds = 2;
+
+    /// <summary>A latching mapping turned on (true) or off (false) - by a press, not a profile reload.</summary>
+    public event Action<Binding, bool>? LatchChanged;
+
+    /// <summary>The active mode changed (null = no mode).</summary>
+    public event Action<string?>? ModeChanged;
+
     /// <summary>Off by default and never persisted - each app launch starts with keyboard
     /// injection disabled so it's never silently active without the user explicitly turning it
     /// on for that session.</summary>
@@ -128,8 +152,21 @@ public sealed class MappingEngine
         _calibrations = profile.AxisCalibrations.ToDictionary(c => (c.DeviceGuid, c.Axis), c => c.Calibration);
 
         _shiftedSlots = [];
-        foreach (var binding in profile.Bindings.Where(b => b.Shifted)) _shiftedSlots.Add(SlotOf(binding));
-        foreach (var keyBinding in profile.KeyBindings.Where(k => k.Shifted)) _shiftedSlots.Add(SlotOf(keyBinding));
+        _shiftedModeSlots = new(StringComparer.OrdinalIgnoreCase);
+        _modeSlots = new(StringComparer.OrdinalIgnoreCase);
+        var mappings = profile.Bindings.Select(b => (Slot: SlotOf(b), b.Shifted, b.ModeName))
+            .Concat(profile.KeyBindings.Select(k => (Slot: SlotOf(k), k.Shifted, k.ModeName)));
+        foreach (var (slot, shifted, modeName) in mappings)
+        {
+            if (modeName is null)
+            {
+                if (shifted) _shiftedSlots.Add(slot);
+                continue;
+            }
+            Add(_modeSlots, modeName, slot);
+            if (shifted) Add(_shiftedModeSlots, modeName, slot);
+        }
+        if (ActiveMode is { } mode && !profile.Modes.Any(m => string.Equals(m.Name, mode, StringComparison.OrdinalIgnoreCase))) ActiveMode = null;
 
         _doubleTapSlots = [];
         foreach (var binding in profile.Bindings.Where(b => b.Trigger == PressTrigger.DoubleTap)) _doubleTapSlots.Add(SlotOf(binding));
@@ -165,6 +202,30 @@ public sealed class MappingEngine
     }
 
     private static string ContentKey(object mapping) => mapping.GetType().Name + JsonSerializer.Serialize(mapping, mapping.GetType());
+
+    private static void Add(Dictionary<string, HashSet<(Guid, ControlKind, int, InputPart)>> sets, string key, (Guid, ControlKind, int, InputPart) slot)
+    {
+        if (!sets.TryGetValue(key, out var set)) sets[key] = set = [];
+        set.Add(slot);
+    }
+
+    /// <summary>The mode picked by its switch at the last tick, or null for none.</summary>
+    public string? ActiveMode { get; private set; }
+
+    /// <summary>Whether a mapping is the one its input uses right now: its mode is the active one
+    /// (or it's an any-mode mapping on an input with nothing for the active mode), and its layer is
+    /// the active one (shifted while shift is held, if the input has shifted mappings in that mode).</summary>
+    private bool InLayer((Guid, ControlKind, int, InputPart) slot, bool shifted, string? modeName, bool shiftHeld)
+    {
+        var mode = ActiveMode;
+        var usesMode = mode is not null && _modeSlots.TryGetValue(mode, out var modeSlots) && modeSlots.Contains(slot);
+        if (usesMode ? !string.Equals(modeName, mode, StringComparison.OrdinalIgnoreCase) : modeName is not null) return false;
+
+        var hasShifted = usesMode
+            ? _shiftedModeSlots.TryGetValue(mode!, out var shiftedSlots) && shiftedSlots.Contains(slot)
+            : _shiftedSlots.Contains(slot);
+        return shifted == (shiftHeld && hasShifted);
+    }
 
     /// <summary>Changes whenever a latch flips or the profile is reloaded, so a view of LatchedSlots
     /// can tell cheaply when to look again.</summary>
@@ -208,7 +269,8 @@ public sealed class MappingEngine
     public IReadOnlyDictionary<Guid, JoystickSnapshot> Tick()
     {
         var now = _clock();
-        var elapsed = double.IsNaN(_lastTick) ? 0 : Math.Clamp(now - _lastTick, 0, MaxNudgeStepSeconds);
+        var firstTick = double.IsNaN(_lastTick);
+        var elapsed = firstTick ? 0 : Math.Clamp(now - _lastTick, 0, MaxNudgeStepSeconds);
         _lastTick = now;
 
         // Poll each device independently: one device throwing (or hanging on a driver quirk)
@@ -233,6 +295,22 @@ public sealed class MappingEngine
                         IsOn(shiftSnap, shift.DeviceGuid, shift.Kind, shift.Index, shift.Part, ShiftAxisThreshold);
         ShiftHeld = shiftHeld;
 
+        string? activeMode = null;
+        foreach (var mode in _profile.Modes)
+        {
+            if (mode.SelectedBy is { } control && snapshots.TryGetValue(control.DeviceGuid, out var modeSnap) &&
+                IsOn(modeSnap, control.DeviceGuid, control.Kind, control.Index, control.Part, ShiftAxisThreshold))
+            {
+                activeMode = mode.Name;
+                break;
+            }
+        }
+        if (!string.Equals(activeMode, ActiveMode, StringComparison.Ordinal))
+        {
+            ActiveMode = activeMode;
+            if (!firstTick) ModeChanged?.Invoke(activeMode); // the mode at start-up isn't a change
+        }
+
         var buttonAgg = new Dictionary<(uint DeviceId, int Button), bool>();
         var povAgg = new Dictionary<(uint DeviceId, int Pov), int>();
         var nudgedThisProfile = new HashSet<(uint, VJoyAxis)>();
@@ -240,7 +318,7 @@ public sealed class MappingEngine
         foreach (var binding in _profile.Bindings)
         {
             if (!snapshots.TryGetValue(binding.Source.DeviceGuid, out var snap)) continue;
-            var inLayer = binding.Shifted == (shiftHeld && _shiftedSlots.Contains(SlotOf(binding)));
+            var inLayer = InLayer(SlotOf(binding), binding.Shifted, binding.ModeName, shiftHeld);
 
             if (binding.Nudge != AxisNudge.None)
             {
@@ -271,6 +349,8 @@ public sealed class MappingEngine
             }
         }
 
+        ApplyTests(now, buttonAgg, povAgg);
+
         // Bindings store vJoy button/hat numbers 0-based (the UI shows them 1-based), but vJoy
         // numbers them from 1 - button 0 / hat 0 don't exist and would be silently ignored.
         foreach (var ((deviceId, button), pressed) in buttonAgg)
@@ -281,6 +361,8 @@ public sealed class MappingEngine
 
         foreach (var axisKey in nudgedThisProfile)
             _vjoy.SetAxis(axisKey.Item1, axisKey.Item2, _nudgedAxes.GetValueOrDefault(axisKey));
+
+        ApplyAxisTests(now);
 
         if (KeyboardInjectionEnabled)
         {
@@ -429,6 +511,7 @@ public sealed class MappingEngine
                 {
                     state.Latched = !state.Latched;
                     LatchVersion++;
+                    LatchChanged?.Invoke(binding, state.Latched);
                 }
                 return state.Latched;
             default:
@@ -453,9 +536,9 @@ public sealed class MappingEngine
 
         var value = _nudgedAxes.GetValueOrDefault(axisKey);
         var sign = binding.Nudge == AxisNudge.Decrease ? -1 : 1;
-        if (binding.Nudge == AxisNudge.Center)
+        if (binding.Nudge is AxisNudge.Center or AxisNudge.SetTo)
         {
-            if (raw) value = 0;
+            if (raw) value = NudgeTarget(binding);
         }
         else if (binding.Mode == SwitchMode.Hold)
         {
@@ -467,6 +550,108 @@ public sealed class MappingEngine
             value += sign * binding.NudgeAmount * 2;
         }
         _nudgedAxes[axisKey] = Math.Clamp(value, -1, 1);
+    }
+
+    /// <summary>Where a Center or SetTo nudge puts its axis (-1..1).</summary>
+    private static double NudgeTarget(Binding binding) =>
+        binding.Nudge == AxisNudge.SetTo ? Math.Clamp(binding.NudgeAmount, 0, 1) * 2 - 1 : 0;
+
+    // ---- Testing a mapping without the hardware (the remap window's Test button) ----
+
+    /// <summary>Presses a vJoy button (0-based, like a Binding's target) for TestPressSeconds.</summary>
+    public void TestButton(uint vjoyDeviceId, int button)
+    {
+        AcquireForTest(vjoyDeviceId);
+        _testButtons[(vjoyDeviceId, button)] = _clock() + TestPressSeconds;
+    }
+
+    /// <summary>Pushes a vJoy hat up, right, down and left in turn, then lets it go.</summary>
+    public void TestHat(uint vjoyDeviceId, int hat)
+    {
+        AcquireForTest(vjoyDeviceId);
+        _testHats[(vjoyDeviceId, hat)] = _clock();
+    }
+
+    /// <summary>Sweeps a vJoy axis to one end, the other, and back to center over TestSweepSeconds.</summary>
+    public void TestAxis(uint vjoyDeviceId, VJoyAxis axis)
+    {
+        AcquireForTest(vjoyDeviceId);
+        _testAxes[(vjoyDeviceId, axis)] = _clock();
+    }
+
+    /// <summary>Does what one press of an axis-moving mapping does (a held one: half a second's worth).</summary>
+    public void TestNudge(Binding binding)
+    {
+        if (binding.Nudge == AxisNudge.None) return;
+        var key = (binding.Target.VJoyDeviceId, (VJoyAxis)binding.Target.Index);
+        var value = _nudgedAxes.GetValueOrDefault(key);
+        var sign = binding.Nudge == AxisNudge.Decrease ? -1 : 1;
+        value = binding.Nudge switch
+        {
+            AxisNudge.Center or AxisNudge.SetTo => NudgeTarget(binding),
+            _ => value + sign * binding.NudgeAmount * 2 * (binding.Mode == SwitchMode.Hold ? 0.5 : 1),
+        };
+        _nudgedAxes[key] = Math.Clamp(value, -1, 1);
+        AcquireForTest(key.VJoyDeviceId);
+        _vjoy.SetAxis(key.VJoyDeviceId, key.Item2, _nudgedAxes[key]);
+    }
+
+    /// <summary>Taps a key mapping's key, or plays its sequence, after delaySeconds (time to switch
+    /// to the game). False (and nothing sent) while keyboard keys are off, or for a key outside the catalog.</summary>
+    public bool TestKeys(KeyBinding keyBinding, double delaySeconds = 0)
+    {
+        if (!KeyboardInjectionEnabled) return false;
+        var played = keyBinding.Sequence is { Count: > 0 }
+            ? keyBinding
+            : new KeyBinding { Source = keyBinding.Source, VirtualKeyCode = keyBinding.VirtualKeyCode, Sequence = [new KeyStep { Keys = [keyBinding.VirtualKeyCode] }] };
+        if (played.Sequence!.Any(s => s.Keys.Any(k => !IsCatalogKey(k)))) return false;
+        StartSequence(played, _clock(), delaySeconds);
+        return true;
+    }
+
+    /// <summary>Takes a vJoy device a test writes to, unless the profile already has it (taking it
+    /// again would reset everything it's showing).</summary>
+    private void AcquireForTest(uint vjoyDeviceId)
+    {
+        if (!_profile.Bindings.Any(b => b.Target.VJoyDeviceId == vjoyDeviceId)) _vjoy.Acquire(vjoyDeviceId);
+    }
+
+    private void ApplyTests(double now, Dictionary<(uint DeviceId, int Button), bool> buttonAgg, Dictionary<(uint DeviceId, int Pov), int> povAgg)
+    {
+        foreach (var (key, until) in _testButtons.ToList())
+        {
+            if (now < until) buttonAgg[key] = true;
+            else
+            {
+                buttonAgg.TryAdd(key, false); // let go, unless a mapping is pressing it
+                _testButtons.Remove(key);
+            }
+        }
+        foreach (var (key, start) in _testHats.ToList())
+        {
+            var step = (int)((now - start) / TestPressSeconds);
+            if (step < 4) povAgg[key] = step;
+            else
+            {
+                povAgg.TryAdd(key, -1);
+                _testHats.Remove(key);
+            }
+        }
+    }
+
+    private void ApplyAxisTests(double now)
+    {
+        foreach (var (key, start) in _testAxes.ToList())
+        {
+            // 0 -> +1 -> -1 -> 0, each leg a third of the sweep.
+            var t = (now - start) / TestSweepSeconds;
+            var value = t < 1.0 / 3 ? t * 3
+                : t < 2.0 / 3 ? 1 - (t - 1.0 / 3) * 6
+                : t < 1 ? -1 + (t - 2.0 / 3) * 3
+                : 0;
+            _vjoy.SetAxis(key.Item1, key.Item2, Math.Clamp(value, -1, 1));
+            if (t >= 1) _testAxes.Remove(key);
+        }
     }
 
     private void ApplyAxis(Binding binding, JoystickSnapshot snap)
@@ -512,7 +697,7 @@ public sealed class MappingEngine
             var raw = IsOn(snap, keyBinding.Source.DeviceGuid, keyBinding.Source.Kind, keyBinding.Source.Index, part,
                 keyBinding.AxisThreshold, keyBinding.ZoneFrom, keyBinding.ZoneTo);
             raw = ApplyTrigger(keyBinding, keyBinding.Trigger, raw, now, SlotOf(keyBinding));
-            var inLayer = keyBinding.Shifted == (shiftHeld && _shiftedSlots.Contains(SlotOf(keyBinding)));
+            var inLayer = InLayer(SlotOf(keyBinding), keyBinding.Shifted, keyBinding.ModeName, shiftHeld);
             var holds = !isSequence && (keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed);
 
             if (!_keyStates.TryGetValue(keyBinding, out var state))
@@ -558,13 +743,13 @@ public sealed class MappingEngine
     /// <summary>Queues a key sequence's presses and releases at their times from now. Ignored
     /// while that sequence is still playing, and refused outright if any step names a key outside
     /// the catalog (see ProcessKeyBindings).</summary>
-    private void StartSequence(KeyBinding keyBinding, double now)
+    private void StartSequence(KeyBinding keyBinding, double now, double delaySeconds = 0)
     {
         if (_sequences.ContainsKey(keyBinding) || keyBinding.Sequence is not { Count: > 0 } steps) return;
         if (steps.Any(s => s.Keys.Any(k => !IsCatalogKey(k)))) return;
 
         var queue = new Queue<PendingKey>();
-        var at = now;
+        var at = now + Math.Max(0, delaySeconds);
         foreach (var step in steps)
         {
             if (step.Keys.Count == 0)

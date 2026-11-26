@@ -73,6 +73,8 @@
                           ToolTip="Lets mappings that send keyboard keys actually press them. Starts OFF every launch, on purpose: simulating real keyboard input is something some anti-cheat software flags, so only turn it on for games where that's fine. Also in the tray icon's menu." />
                 <CheckBox x:Name="StartWithWindowsCheck" Content="Start with Windows" VerticalAlignment="Center" Margin="16,0,0,0"
                           Checked="StartWithWindows_Changed" Unchecked="StartWithWindows_Changed" />
+                <TextBlock x:Name="ModeStatusText" VerticalAlignment="Center" Margin="16,0,0,0" FontWeight="SemiBold" Foreground="#1565C0" Visibility="Collapsed"
+                           ToolTip="The active mode, picked by its switch. Set up modes with Modes... on the Mappings tab." />
             </StackPanel>
         </Border>
 
@@ -343,8 +345,10 @@
                             <Button Content="Set background..." Click="LayoutSetBackground_Click" Padding="8,2" Margin="0,0,4,0"
                                     ToolTip="Load a picture of your controls (a manual's diagram, a photo, a schematic) to place control markers on. You can also drop a picture file onto the page." />
                             <Button x:Name="LayoutClearBackgroundButton" Content="Clear background" Click="LayoutClearBackground_Click" Padding="8,2" Margin="0,0,4,0" />
-                            <Button x:Name="LayoutExportImageButton" Content="Export image..." Click="LayoutExportImage_Click" Padding="8,2" Margin="0,0,16,0"
+                            <Button x:Name="LayoutExportImageButton" Content="Export image..." Click="LayoutExportImage_Click" Padding="8,2" Margin="0,0,4,0"
                                     ToolTip="Save this page - picture, markers, mappings and text - as a PNG, e.g. to print as a reference card or use as a sim kneeboard page." />
+                            <Button x:Name="LayoutPrintButton" Content="Print..." Click="LayoutPrint_Click" Padding="8,2" Margin="0,0,16,0"
+                                    ToolTip="Print this page as a reference card, turned and sized to fit the paper. Pick Microsoft Print to PDF to save it as a PDF." />
                             <CheckBox x:Name="LayoutEditToggle" Content="Edit layout" VerticalAlignment="Center" Margin="0,0,8,0"
                                       Checked="LayoutEditToggle_Changed" Unchecked="LayoutEditToggle_Changed"
                                       ToolTip="Place controls and text on the picture and drag them into position. Untick to lock them in place - clicking a control then opens its remap editor." />
@@ -592,8 +596,10 @@
                     </Expander>
 
                     <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
-                        <Button DockPanel.Dock="Left" Content="Add..." Click="AddMapping_Click" Padding="12,2" Margin="0,0,12,0" FontWeight="SemiBold"
+                        <Button DockPanel.Dock="Left" Content="Add..." Click="AddMapping_Click" Padding="12,2" Margin="0,0,4,0" FontWeight="SemiBold"
                                 ToolTip="Pick a control (or press it on your hardware) and choose what it does" />
+                        <Button DockPanel.Dock="Left" Content="Modes..." Click="Modes_Click" Padding="8,2" Margin="0,0,12,0"
+                                ToolTip="Set up modes (e.g. Nav, Combat, Landing): whole sets of mappings picked by a switch" />
                         <TextBlock DockPanel.Dock="Left" Text="Show:" VerticalAlignment="Center" Margin="0,0,4,0" />
                         <ComboBox x:Name="MappingDeviceFilterCombo" DockPanel.Dock="Left" Width="160" Margin="0,0,4,0"
                                   ItemsSource="{Binding MappingDeviceFilters}" SelectionChanged="MappingFilter_SelectionChanged" />
@@ -601,6 +607,10 @@
                                   ItemsSource="{Binding MappingLayerFilters}" SelectionChanged="MappingFilter_SelectionChanged" />
                         <ComboBox x:Name="MappingTypeFilterCombo" DockPanel.Dock="Left" Width="100" Margin="0,0,12,0"
                                   ItemsSource="{Binding MappingTypeFilters}" SelectionChanged="MappingFilter_SelectionChanged" />
+                        <TextBlock DockPanel.Dock="Left" Text="Search:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox x:Name="MappingSearchBox" DockPanel.Dock="Left" Width="130" Margin="0,0,12,0" VerticalContentAlignment="Center"
+                                 TextChanged="MappingSearch_TextChanged" AutomationProperties.Name="Search mappings"
+                                 ToolTip="Show only mappings whose device, control, mode, type or what they do contains this text" />
                         <TextBlock x:Name="MappingCountText" VerticalAlignment="Center" Foreground="Gray" TextTrimming="CharacterEllipsis" />
                     </DockPanel>
                     <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11" Foreground="#555555"
@@ -613,8 +623,16 @@
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Device" Binding="{Binding Device}" Width="150" />
                             <DataGridTextColumn Header="Control" Binding="{Binding Control}" Width="150" />
-                            <DataGridTextColumn Header="Layer" Binding="{Binding Layer}" Width="70" />
+                            <DataGridTextColumn Header="Layer" Binding="{Binding Layer}" Width="100" />
                             <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="80" />
+                            <DataGridTemplateColumn Header="⚠" Width="28" SortMemberPath="WarningMark">
+                                <DataGridTemplateColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding WarningMark}" ToolTip="{Binding WarningTip}" Foreground="#B04000" FontWeight="Bold"
+                                                   HorizontalAlignment="Center" />
+                                    </DataTemplate>
+                                </DataGridTemplateColumn.CellTemplate>
+                            </DataGridTemplateColumn>
                             <DataGridTextColumn Header="Does" Binding="{Binding Output}" Width="*" />
                             <DataGridTemplateColumn Header="" Width="130" CanUserSort="False">
                                 <DataGridTemplateColumn.CellTemplate>
@@ -715,6 +733,8 @@
                                         <TextBlock Text="Profile:" Width="60" VerticalAlignment="Center" />
                                         <ComboBox x:Name="GameProfileCombo" ItemsSource="{Binding ProfileNames}" />
                                     </DockPanel>
+                                    <CheckBox x:Name="GameKeysCheck" Content="Turn keyboard keys on while it runs" Margin="60,4,0,0"
+                                              ToolTip="Keyboard keys start off every launch. Tick this to turn them on automatically while this game runs, and off again when it closes." />
                                     <Button Content="Add" Click="AddGameProfile_Click" HorizontalAlignment="Left" Padding="14,2" Margin="60,6,0,0" />
                                 </StackPanel>
                             </GroupBox>
@@ -726,6 +746,9 @@
                                         <DataTemplate>
                                             <DockPanel Margin="0,3">
                                                 <Button DockPanel.Dock="Right" Content="Remove" Click="RemoveGameProfile_Click" Padding="8,0" />
+                                                <CheckBox DockPanel.Dock="Right" Content="Keys on" VerticalAlignment="Center" Margin="0,0,8,0"
+                                                          IsChecked="{Binding Entry.KeyboardKeysOn, Mode=OneWay}" Checked="GameKeys_Changed" Unchecked="GameKeys_Changed"
+                                                          ToolTip="Turn keyboard keys on while this game runs, and off again when it closes." />
                                                 <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
                                                     <Run Text="{Binding Entry.ProcessName, Mode=OneWay}" FontWeight="Bold" />
                                                     <Run Text="  uses  " Foreground="Gray" />

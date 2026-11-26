@@ -39,6 +39,16 @@ public sealed class Binding
 
     /// <summary>Zone part only: see ZoneFrom.</summary>
     public double ZoneTo { get; init; } = 1;
+
+    /// <summary>The mode (see Profile.Modes) this mapping belongs to, or null for any mode. In a
+    /// mode, an input with mappings of that mode uses those instead of its any-mode ones.</summary>
+    public string? ModeName { get; init; }
+
+    /// <summary>Latch only: spoken when the latch turns on / off (e.g. "Gear down"), or null for silence.</summary>
+    public string? SayOn { get; init; }
+
+    /// <summary>Latch only: see SayOn.</summary>
+    public string? SayOff { get; init; }
 }
 
 /// <summary>Which kind of press makes an on/off source (button, hat direction, axis half or zone)
@@ -85,6 +95,9 @@ public enum AxisNudge
     Increase,
     Decrease,
     Center,
+
+    /// <summary>Jump to a fixed position - Binding.NudgeAmount, as travel 0..1 (e.g. a flaps detent).</summary>
+    SetTo,
 }
 
 /// <summary>Which control is the profile's shift: while it's held, controls with shift-layer
@@ -230,6 +243,9 @@ public sealed class KeyBinding
     /// <summary>Not empty = a key sequence (macro) played once each time the control is pressed,
     /// instead of the single VirtualKeyCode.</summary>
     public List<KeyStep>? Sequence { get; init; }
+
+    /// <summary>See Binding.ModeName.</summary>
+    public string? ModeName { get; init; }
 }
 
 /// <summary>One step of a key sequence: a key (or keys pressed together, e.g. Ctrl+G) tapped, or
@@ -302,6 +318,21 @@ public sealed class Profile
 
     /// <summary>Per-panel options for StreamDock panels (key name pictures, press highlight).</summary>
     public List<KeyScreenSettings> KeyScreenSettings { get; set; } = [];
+
+    /// <summary>Mapping modes (e.g. Nav, Combat, Landing), each picked by a switch position. The
+    /// first whose control is on is the active mode; with none on, only any-mode mappings apply.</summary>
+    public List<ModeDefinition> Modes { get; set; } = [];
+
+    /// <summary>Say the mode's name aloud when it changes.</summary>
+    public bool AnnounceModes { get; set; }
+}
+
+/// <summary>One mapping mode: a name, and the control (or part of one, e.g. one position of a
+/// 3-way switch) that selects it while it's on.</summary>
+public sealed class ModeDefinition
+{
+    public required string Name { get; set; }
+    public ShiftControl? SelectedBy { get; set; }
 }
 
 /// <summary>Options for one StreamDock panel's key screens.</summary>

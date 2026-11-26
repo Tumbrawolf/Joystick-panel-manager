@@ -14,4 +14,12 @@ public static class ModelCopy
         node["Source"]!["DeviceGuid"] = JsonValue.Create(deviceGuid);
         return node.Deserialize<T>() ?? throw new InvalidOperationException("The mapping could not be copied.");
     }
+
+    /// <summary>A full copy of a Binding or KeyBinding, belonging to another mode (null = any mode).</summary>
+    public static T WithModeName<T>(T mapping, string? modeName) where T : class
+    {
+        var node = JsonSerializer.SerializeToNode(mapping)!;
+        node["ModeName"] = modeName is null ? null : JsonValue.Create(modeName);
+        return node.Deserialize<T>() ?? throw new InvalidOperationException("The mapping could not be copied.");
+    }
 }

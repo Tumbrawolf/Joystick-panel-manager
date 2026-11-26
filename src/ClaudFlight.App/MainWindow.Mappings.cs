@@ -14,10 +14,14 @@ namespace ClaudFlight.App;
 /// <summary>One line of the Mappings tab: something one control (or part of one) does.</summary>
 public sealed record MappingListRow(
     string Device, string Control, string Layer, string Type, string Output,
-    Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, object? Source)
+    Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, object? Source,
+    bool IsShifted = false, string Warning = "")
 {
+    public string WarningMark => Warning.Length > 0 ? "⚠" : "";
+    public string? WarningTip => Warning.Length > 0 ? Warning : null;
+
     /// <summary>What a screen reader says for the row.</summary>
-    public override string ToString() => $"{Device} {Control}: {Output} ({Layer} layer)";
+    public override string ToString() => $"{Device} {Control}: {Output} ({Layer} layer)" + (Warning.Length > 0 ? $". {Warning}" : "");
 }
 
 /// <summary>A choice in one of the Mappings tab's filter dropdowns.</summary>
@@ -38,7 +42,9 @@ public partial class MainWindow
         [new("Both layers", null), new("Normal", "Normal"), new("Shifted", "Shifted")];
 
     public IReadOnlyList<MappingFilterOption> MappingTypeFilters { get; } =
-        [new("Everything", null), new("vJoy", "vJoy"), new("Keys", "Key"), new("Axis moves", "Axis move")];
+        [new("Everything", null), new("vJoy", "vJoy"), new("Keys", "Key"), new("Axis moves", "Axis move"), new("Conflicts", ConflictsFilter)];
+
+    private const string ConflictsFilter = "Conflicts";
 
     private bool _rebuildingMappingList;
 
@@ -51,20 +57,27 @@ public partial class MainWindow
         _rebuildingMappingList = true;
         var selectedDevice = (MappingDeviceFilterCombo.SelectedItem as MappingFilterOption)?.Value;
 
+        RefreshConflicts();
         MappingRows.Clear();
         foreach (var binding in _currentProfile.Bindings)
         {
             var type = binding.Nudge != AxisNudge.None ? "Axis move" : "vJoy";
-            MappingRows.Add(Row(binding.Source, binding.Part, binding.Shifted, type, DescribeBinding(binding), binding));
+            MappingRows.Add(Row(binding.Source, binding.Part, binding.Shifted, binding.ModeName, type, DescribeBinding(binding), binding));
         }
         foreach (var keyBinding in _currentProfile.KeyBindings)
         {
-            MappingRows.Add(Row(keyBinding.Source, InputParts.Of(keyBinding), keyBinding.Shifted, "Key", DescribeKeyBinding(keyBinding), keyBinding));
+            MappingRows.Add(Row(keyBinding.Source, InputParts.Of(keyBinding), keyBinding.Shifted, keyBinding.ModeName, "Key", DescribeKeyBinding(keyBinding), keyBinding));
         }
         if (_currentProfile.ShiftControl is { } shift)
         {
-            MappingRows.Add(Row(new InputRef(shift.DeviceGuid, shift.Kind, shift.Index), shift.Part, false, "Shift",
+            MappingRows.Add(Row(new InputRef(shift.DeviceGuid, shift.Kind, shift.Index), shift.Part, false, null, "Shift",
                 "Shift: hold for the shifted layer", null));
+        }
+        foreach (var mode in _currentProfile.Modes)
+        {
+            if (mode.SelectedBy is not { } control) continue;
+            MappingRows.Add(Row(new InputRef(control.DeviceGuid, control.Kind, control.Index), control.Part, false, null, "Mode",
+                $"Mode switch: {mode.Name}", mode));
         }
 
         MappingDeviceFilters.Clear();
@@ -81,11 +94,13 @@ public partial class MainWindow
         ApplyMappingFilter();
         return;
 
-        MappingListRow Row(InputRef source, InputPart part, bool shifted, string type, string output, object? model)
+        MappingListRow Row(InputRef source, InputPart part, bool shifted, string? modeName, string type, string output, object? model)
         {
+            var layer = modeName is null ? shifted ? "Shifted" : "Normal" : shifted ? $"{modeName}, shifted" : modeName;
             return new MappingListRow(DeviceName(source.DeviceGuid), ControlName(source.DeviceGuid, source.Kind, source.Index, part),
-                shifted ? "Shifted" : "Normal", type, output,
-                source.DeviceGuid, source.Kind, source.Index, part, model);
+                layer, type, output,
+                source.DeviceGuid, source.Kind, source.Index, part, model,
+                shifted, model is Binding or ClaudFlight.Core.Models.KeyBinding ? ConflictNote(model) : "");
         }
     }
 
@@ -94,22 +109,41 @@ public partial class MainWindow
         if (!_rebuildingMappingList) ApplyMappingFilter();
     }
 
+    private void MappingSearch_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_rebuildingMappingList && IsLoaded) ApplyMappingFilter();
+    }
+
     private void ApplyMappingFilter()
     {
         var device = (MappingDeviceFilterCombo.SelectedItem as MappingFilterOption)?.Value;
         var layer = (MappingLayerFilterCombo.SelectedItem as MappingFilterOption)?.Value as string;
         var type = (MappingTypeFilterCombo.SelectedItem as MappingFilterOption)?.Value as string;
+        var search = MappingSearchBox.Text.Trim();
 
         var view = CollectionViewSource.GetDefaultView(MappingRows);
         view.Filter = item => item is MappingListRow row &&
                               (device is null || Equals(row.DeviceGuid, device)) &&
-                              (layer is null || row.Layer == layer || row.Type == "Shift") &&
-                              (type is null || row.Type == type);
+                              (layer is null || row.Type is "Shift" or "Mode" || (layer == "Shifted") == row.IsShifted) &&
+                              (type is null || (type == ConflictsFilter ? row.Warning.Length > 0 : row.Type == type)) &&
+                              (search.Length == 0 || MatchesSearch(row, search));
 
         var shown = view.Cast<object>().Count();
         MappingCountText.Text = MappingRows.Count == 0
             ? "Nothing is mapped yet. Click \"Add...\", right-click a control on Live Monitor, or click a marker on the Layout tab."
             : shown == MappingRows.Count ? $"{MappingRows.Count} mapping(s)." : $"Showing {shown} of {MappingRows.Count} mapping(s).";
+        var clashing = MappingRows.Count(r => r.Warning.Length > 0);
+        if (clashing > 0) MappingCountText.Text += $"  ⚠ {clashing} clash with another mapping - pick \"{ConflictsFilter}\" to see them.";
+    }
+
+    private static bool MatchesSearch(MappingListRow row, string search) =>
+        new[] { row.Device, row.Control, row.Layer, row.Type, row.Output }.Any(text => text.Contains(search, StringComparison.CurrentCultureIgnoreCase));
+
+    /// <summary>Opens a row for changes: the remap window, or for a mode switch, the Modes window.</summary>
+    private void OpenMappingRow(MappingListRow row)
+    {
+        if (row.Source is ModeDefinition) new ModesWindow(this).ShowDialog();
+        else OpenRemap(row.DeviceGuid, row.Kind, row.Index, row.Part, row.Source);
     }
 
     private void MappingsGrid_MouseDoubleClick(object sender, MouseButtonEventArgs e)
@@ -117,19 +151,23 @@ public partial class MainWindow
         // Only a double-click on a row (not the header or empty space).
         if (e.OriginalSource is DependencyObject source && ItemsControl.ContainerFromElement(MappingsGrid, source) is DataGridRow { Item: MappingListRow row })
         {
-            OpenRemap(row.DeviceGuid, row.Kind, row.Index, row.Part, row.Source);
+            OpenMappingRow(row);
         }
     }
 
     private void ChangeMapping_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: MappingListRow row }) OpenRemap(row.DeviceGuid, row.Kind, row.Index, row.Part, row.Source);
+        if (sender is FrameworkElement { DataContext: MappingListRow row }) OpenMappingRow(row);
     }
 
     private void RemoveMapping_Click(object sender, RoutedEventArgs e)
     {
         if (sender is not FrameworkElement { DataContext: MappingListRow row }) return;
-        if (row.Source is null)
+        if (row.Source is ModeDefinition mode)
+        {
+            ConfirmDeleteMode(mode, this);
+        }
+        else if (row.Source is null)
         {
             _currentProfile.ShiftControl = null;
             AfterRemapsChanged();

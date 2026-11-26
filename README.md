@@ -26,7 +26,8 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
   as you like). Add free text labels for titles and notes. Make as many pages as you like (one per
   device, or one for a whole HOTAS); the pictures are saved inside the profile. **Export image...**
   saves a page, markers and all, as a PNG at the background picture's own resolution - a cheat
-  sheet to print or keep on a second screen.
+  sheet to keep on a second screen or use as a kneeboard page - and **Print...** prints it, turned
+  and sized to fit the paper (pick *Microsoft Print to PDF* to get a PDF).
 - **Split controls** — any single hat direction can press a vJoy button or key (diagonals press
   both neighbouring directions), and either end of an axis can act as a button once it's pushed
   past a set point - handy for things like a throttle detent or a two-way rocker axis.
@@ -45,17 +46,33 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
 - **Shift layer** — pick any button (or hat direction, or axis end) as the shift control; while
   it's held, every control with a shifted mapping does that instead. Controls without a shifted
   mapping keep doing their normal thing, so you only set up the extras.
+- **Modes** — whole sets of mappings picked by a switch, e.g. Nav, Combat and Landing on a 3-way
+  switch (**Modes...** on the Mappings tab). While a mode's switch is on, any control with mappings
+  for that mode uses them instead of its usual ones; the rest keep their usual mappings. Each
+  mapping's mode is set in its remap window, the top bar shows the active mode, and it can be
+  spoken aloud when it changes. The shift layer works inside every mode.
 - **Axis trim from buttons** — a button can nudge a vJoy axis up or down (smoothly while held, or
-  a step per press) or snap it back to center - for trim wheels, zoom, or a throttle on a stick
-  with no lever.
+  a step per press), snap it back to center, or put it at a set position (e.g. a flaps detent at
+  25%) - for trim wheels, zoom, flaps, or a throttle on a stick with no lever.
+- **Spoken latches** — a latching button can say something when it turns on and off ("Gear down" /
+  "Gear up"), using Windows' built-in voice.
+- **Test** — the remap window's **Test** button sends what you're setting up once, without the
+  hardware: presses the vJoy button, sweeps the axis, turns the hat, moves the axis to its preset,
+  or (with keyboard keys on) types the key or sequence after a 3 second pause so you can switch to
+  the game.
 - **Mapping** — combine multiple physical devices into one or more virtual [vJoy](https://github.com/BrunnerInnovation/vJoy/releases)
   controllers that games bind to, and/or have any control press keyboard keys (for games or
   functions that take keyboard input but not joystick input). Every change goes through one remap
   window, which you can open from wherever you are: right-click a control on **Live Monitor**,
   click its marker on the **Layout** tab, or use **Add...** / double-click a line on the
   **Mappings** tab. The Mappings tab lists everything mapped in plain words, filterable by device,
-  layer and type and sortable by any column. **Map all to vJoy...** on a device's card maps every
-  control on that device in one click.
+  layer and type, searchable, and sortable by any column. **Map all to vJoy...** on a device's card
+  maps every control on that device in one click.
+- **Conflict warnings** — a ⚠ marks mappings that fight over one output: a vJoy button, hat or key
+  pressed from two different controls, or a vJoy axis driven by two axes (or an axis and a button).
+  Pick **Conflicts** in the Mappings tab's type filter to list them; the remap window warns as you
+  pick an output that's already in use. Mappings in different modes never count, nor do several
+  buttons moving one axis (trim up/down/center).
 - **vJoy Output** tab — shows what your mappings are sending right now: every vJoy axis, button
   and hat a game would see, and the last keyboard keys pressed. It works without vJoy installed,
   so you can check mappings before installing it.
@@ -71,7 +88,8 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
   most every 10 minutes while it changes); **Backups...** on the Profiles tab puts one back.
 - **Per-game profiles** — on the Profiles tab, tell ClaudFlight which profile goes with which
   game; it switches to that profile while the game is running and back to your previous one when
-  the game closes.
+  the game closes. Tick **Keys on** for a game to have keyboard keys turned on while it runs and
+  off again when it closes.
 - **Runs in the background** — closing or minimizing the window sends it to the system tray
   instead of exiting, so mapping keeps running while you're in a game. Tick **Start with Windows**
   (top of the window or the tray menu) to have it start in the tray when you sign in.
@@ -149,6 +167,8 @@ Key mappings simulate real keystrokes via Windows' `SendInput` API — the same
 mechanism legitimate macro tools use. This is why it's **off by default every time the app
 starts** and has to be explicitly re-enabled each session: some anti-cheat software flags
 background keyboard injection, so only turn it on for games/situations where that's acceptable.
+The one exception is a game you've ticked **Keys on** for on the Profiles tab: keys come on while
+that game runs and go off again when it closes - so only tick it for games where that's fine.
 Only keys from a curated safe list (letters, numbers, F1-F24, navigation, common punctuation,
 modifiers) can ever be simulated, even if a profile file were edited by hand.
 

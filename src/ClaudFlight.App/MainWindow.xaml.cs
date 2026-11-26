@@ -46,6 +46,7 @@ public partial class MainWindow : Window
         _vjoyRecorder = new VJoyOutputRecorder(_vjoyManager);
         _keyRecorder = new KeyOutputRecorder(new SendInputKeyOutput());
         _engine = new MappingEngine(AllDevices, _vjoyRecorder, _keyRecorder);
+        HookEngineEvents();
 
         InitializeComponent();
         DataContext = this;
@@ -261,6 +262,7 @@ public partial class MainWindow : Window
         }
 
         RefreshKeyStateIfChanged();
+        RefreshModeStatus();
 
         if (IsOutputTabShown)
         {
