@@ -4,6 +4,125 @@ public sealed class Binding
 {
     public required InputRef Source { get; init; }
     public required OutputRef Target { get; init; }
+
+    /// <summary>Which part of the source control this binding reads. Whole (the default) passes
+    /// the control straight through to the same kind of vJoy control; any other part (one hat
+    /// direction, one half of an axis) acts as an on/off switch and drives a vJoy button.</summary>
+    public InputPart Part { get; init; } = InputPart.Whole;
+
+    /// <summary>Positive/Negative parts only: how far (0..1, calibrated) the axis must move in
+    /// that direction to count as pressed.</summary>
+    public double AxisThreshold { get; init; } = 0.5;
+
+    /// <summary>On/off sources (a button, a hat direction, an axis half) only: how the source
+    /// drives its output - see SwitchMode.</summary>
+    public SwitchMode Mode { get; init; } = SwitchMode.Hold;
+
+    /// <summary>True = this mapping belongs to the shift layer: it's used while the profile's
+    /// shift control is held (see Profile.ShiftControl).</summary>
+    public bool Shifted { get; init; }
+
+    /// <summary>Not None = an on/off source moving a vJoy axis (Target is that axis) instead of
+    /// pressing something - e.g. trim up/down buttons. See NudgeAmount.</summary>
+    public AxisNudge Nudge { get; init; } = AxisNudge.None;
+
+    /// <summary>Nudge only: fraction of the axis's full travel (0..1) to move per second while
+    /// held (Mode Hold), or per press (any other mode).</summary>
+    public double NudgeAmount { get; init; } = 0.5;
+}
+
+/// <summary>How an on/off source (button, hat direction, axis half) drives its output.</summary>
+public enum SwitchMode
+{
+    /// <summary>Output is on exactly while the source is on.</summary>
+    Hold,
+
+    /// <summary>A short press each time the source switches on.</summary>
+    PulseOnPress,
+
+    /// <summary>A short press each time the source flips, on or off - for a toggle switch driving
+    /// a sim that expects a button press for each change.</summary>
+    PulseOnBoth,
+
+    /// <summary>Press once to turn the output on, press again to turn it off.</summary>
+    Latch,
+}
+
+/// <summary>What an on/off source does to a vJoy axis it nudges.</summary>
+public enum AxisNudge
+{
+    None,
+    Increase,
+    Decrease,
+    Center,
+}
+
+/// <summary>Which control is the profile's shift: while it's held, controls with shift-layer
+/// mappings use those instead of their normal ones.</summary>
+public sealed record ShiftControl(Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part);
+
+/// <summary>A separately remappable part of a physical control: the whole control, one of a hat's
+/// four directions, or one half of an axis.</summary>
+public enum InputPart
+{
+    Whole,
+    Up,
+    Right,
+    Down,
+    Left,
+    Positive,
+    Negative,
+}
+
+public static class InputParts
+{
+    /// <summary>The parts a control of this kind can be remapped by.</summary>
+    public static IReadOnlyList<InputPart> For(ControlKind kind) => kind switch
+    {
+        ControlKind.Pov => [InputPart.Whole, InputPart.Up, InputPart.Right, InputPart.Down, InputPart.Left],
+        ControlKind.Axis => [InputPart.Whole, InputPart.Positive, InputPart.Negative],
+        _ => [InputPart.Whole],
+    };
+
+    /// <summary>Appended to a control's name to name one of its parts, e.g. "Hat 1 ↑".</summary>
+    public static string Suffix(InputPart part) => part switch
+    {
+        InputPart.Up => " ↑",
+        InputPart.Right => " →",
+        InputPart.Down => " ↓",
+        InputPart.Left => " ←",
+        InputPart.Positive => " +",
+        InputPart.Negative => " −",
+        _ => "",
+    };
+
+    public static bool IsDirection(InputPart part) => part is >= InputPart.Up and <= InputPart.Left;
+
+    /// <summary>0=N, 1=E, 2=S, 3=W, matching KeyBinding.PovDirection.</summary>
+    public static int ToPovDirection(InputPart part) => part - InputPart.Up;
+
+    public static InputPart FromPovDirection(int direction) => InputPart.Up + Math.Clamp(direction, 0, 3);
+
+    /// <summary>The part a keyboard binding reads (keys always need an on/off part, so a hat or
+    /// axis key binding is always one direction or one half).</summary>
+    public static InputPart Of(KeyBinding keyBinding) => keyBinding.Source.Kind switch
+    {
+        ControlKind.Pov => FromPovDirection(keyBinding.PovDirection),
+        ControlKind.Axis => keyBinding.AxisAboveThreshold ? InputPart.Positive : InputPart.Negative,
+        _ => InputPart.Whole,
+    };
+
+    /// <summary>True if a hat reading (hundredths of a degree, -1 = centered) is pushed toward
+    /// this direction. Diagonals count for both neighbouring directions, so an 8-way hat pushed
+    /// up-right presses both the Up and Right outputs.</summary>
+    public static bool IsPovDirectionActive(int rawHundredthDegrees, InputPart direction)
+    {
+        if (rawHundredthDegrees < 0) return false;
+        var angle = rawHundredthDegrees / 100.0;
+        var target = ToPovDirection(direction) * 90.0;
+        var difference = Math.Abs((angle - target + 540.0) % 360.0 - 180.0);
+        return difference < 67.5;
+    }
 }
 
 /// <summary>Calibration for one physical axis, shared by every binding that reads that axis
@@ -48,6 +167,13 @@ public sealed class KeyBinding
     /// <summary>Axis only: true = active when the calibrated value is &gt;= threshold, false =
     /// active when &lt;= -threshold.</summary>
     public bool AxisAboveThreshold { get; init; } = true;
+
+    /// <summary>Tap mode only (HoldWhilePressed false): also tap when the control switches off,
+    /// so a toggle switch taps the key on every flip.</summary>
+    public bool TapOnRelease { get; init; }
+
+    /// <summary>True = this key belongs to the shift layer (see Binding.Shifted).</summary>
+    public bool Shifted { get; init; }
 }
 
 public sealed class Profile
@@ -100,6 +226,27 @@ public sealed class Profile
 
     /// <summary>Pictures shown on buttons that have their own screen (StreamDock panel keys).</summary>
     public List<ButtonImageEntry> ButtonImages { get; set; } = [];
+
+    /// <summary>The Layout tab's pages: background pictures with control markers placed on them.</summary>
+    public List<LayoutPage> LayoutPages { get; set; } = [];
+
+    /// <summary>The control that switches to the shift layer while held, or null for none.</summary>
+    public ShiftControl? ShiftControl { get; set; }
+
+    /// <summary>Per-panel options for StreamDock panels (key name pictures, press highlight).</summary>
+    public List<KeyScreenSettings> KeyScreenSettings { get; set; } = [];
+}
+
+/// <summary>Options for one StreamDock panel's key screens.</summary>
+public sealed class KeyScreenSettings
+{
+    public required Guid DeviceGuid { get; init; }
+
+    /// <summary>Keys without a picture of their own show their name (and what they're mapped to).</summary>
+    public bool ShowNames { get; set; }
+
+    /// <summary>Keys without a pressed picture of their own light up while held.</summary>
+    public bool HighlightPressed { get; set; }
 }
 
 /// <summary>The picture shown on one button's screen: a JPEG already sized for that device's
@@ -108,7 +255,12 @@ public sealed class ButtonImageEntry
 {
     public required Guid DeviceGuid { get; init; }
     public required int ButtonIndex { get; init; }
-    public required byte[] Jpeg { get; init; }
+
+    /// <summary>The normal picture, or null if this entry only sets a pressed picture.</summary>
+    public byte[]? Jpeg { get; set; }
+
+    /// <summary>Shown instead while the key is held, or null for no change when pressed.</summary>
+    public byte[]? PressedJpeg { get; set; }
 }
 
 /// <summary>One virtual-key code a specific Raw Input device has been seen to send.</summary>

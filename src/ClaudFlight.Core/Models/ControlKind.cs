@@ -12,7 +12,8 @@ public enum ControlKind
 public sealed record InputRef(Guid DeviceGuid, ControlKind Kind, int Index);
 
 /// <summary>Identifies one control on a virtual (vJoy) device.</summary>
-/// <param name="Index">HID usage code (see VJoyAxis) for Axis; 1-based button number for Button; 0-based POV index for Pov.</param>
+/// <param name="Index">HID usage code (see VJoyAxis) for Axis; 0-based button index for Button; 0-based POV index for Pov.
+/// The UI shows buttons/POVs 1-based, and MappingEngine adds 1 when writing to vJoy, which numbers them from 1.</param>
 public sealed record OutputRef(uint VJoyDeviceId, ControlKind Kind, int Index);
 
 /// <summary>HID usage codes vJoy expects for SetAxis.</summary>

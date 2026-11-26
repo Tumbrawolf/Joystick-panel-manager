@@ -18,6 +18,25 @@ public sealed class DeviceMonitorViewModel(Guid deviceGuid, string deviceName) :
 
     public IReadOnlyList<AxisType> PresentAxes { get; init; } = [];
 
+    /// <summary>True for StreamDock panels, whose keys have their own screens.</summary>
+    public bool HasKeyScreens { get; init; }
+
+    private bool _showKeyNames;
+    /// <summary>Keys without a picture show their name and what they're mapped to.</summary>
+    public bool ShowKeyNames
+    {
+        get => _showKeyNames;
+        set => SetField(ref _showKeyNames, value);
+    }
+
+    private bool _highlightPressedKeys;
+    /// <summary>Keys without a pressed picture light up while held.</summary>
+    public bool HighlightPressedKeys
+    {
+        get => _highlightPressedKeys;
+        set => SetField(ref _highlightPressedKeys, value);
+    }
+
     public ObservableCollection<AxisReadingViewModel> Axes { get; } = [];
     public ObservableCollection<ButtonReadingViewModel> Buttons { get; } = [];
     public ObservableCollection<PovReadingViewModel> Povs { get; } = [];
@@ -114,9 +133,8 @@ public sealed class ButtonReadingViewModel(Guid deviceGuid, int index) : Observa
     public ControlKind Kind => ControlKind.Button;
     public int ControlIndex => Index;
 
-    /// <summary>1-based number shown on the lamp - matches what Mapping's "Source #"/"Target #"
-    /// fields expect, so the number you see is the number you type (DirectInput/vJoy indices are
-    /// 0-based internally, but showing that would just invite off-by-one mistakes).</summary>
+    /// <summary>1-based number shown on the lamp (DirectInput/vJoy indices are 0-based
+    /// internally, but showing that would just invite off-by-one mistakes).</summary>
     public int DisplayNumber => Index + 1;
 
     private string _label = $"{index + 1}";
@@ -131,24 +149,56 @@ public sealed class ButtonReadingViewModel(Guid deviceGuid, int index) : Observa
     public bool IsPressed
     {
         get => _isPressed;
-        set => SetField(ref _isPressed, value);
+        set
+        {
+            if (SetField(ref _isPressed, value) && _pressedImage is not null) Raise(nameof(ShownImage));
+        }
     }
 
     /// <summary>True if this button has its own screen (a StreamDock key) that can show a picture.</summary>
     public bool HasScreen { get; init; }
 
     private System.Windows.Media.ImageSource? _image;
-    /// <summary>Thumbnail of the picture on this button's screen, or null if it's blank.</summary>
+    /// <summary>Thumbnail of what this button's screen shows (its own picture or its generated
+    /// name picture), or null if it's blank.</summary>
     public System.Windows.Media.ImageSource? Image
     {
         get => _image;
         set
         {
-            if (SetField(ref _image, value)) Raise(nameof(HasImage));
+            if (SetField(ref _image, value)) Raise(nameof(ShownImage));
         }
     }
 
-    public bool HasImage => _image is not null;
+    private System.Windows.Media.ImageSource? _pressedImage;
+    /// <summary>What the screen shows while the key is held, or null for no change.</summary>
+    public System.Windows.Media.ImageSource? PressedImage
+    {
+        get => _pressedImage;
+        set
+        {
+            if (SetField(ref _pressedImage, value)) Raise(nameof(ShownImage));
+        }
+    }
+
+    /// <summary>The thumbnail to show right now: mirrors the key's screen, pressed state included.</summary>
+    public System.Windows.Media.ImageSource? ShownImage => IsPressed && _pressedImage is not null ? _pressedImage : _image;
+
+    private bool _hasOwnImage;
+    /// <summary>True if the user set a picture for this key (rather than a generated one).</summary>
+    public bool HasOwnImage
+    {
+        get => _hasOwnImage;
+        set => SetField(ref _hasOwnImage, value);
+    }
+
+    private bool _hasOwnPressedImage;
+    /// <summary>True if the user set a pressed picture for this key.</summary>
+    public bool HasOwnPressedImage
+    {
+        get => _hasOwnPressedImage;
+        set => SetField(ref _hasOwnPressedImage, value);
+    }
 }
 
 /// <summary>One selectable way to expose a Raw Input mouse-style device's native axis: a
@@ -197,7 +247,7 @@ public sealed class PovReadingViewModel(Guid deviceGuid, int index) : Observable
     public ControlKind Kind => ControlKind.Pov;
     public int ControlIndex => Index;
 
-    /// <summary>1-based number - matches what Mapping's "Source #"/"Target #" fields expect.</summary>
+    /// <summary>1-based number, as shown to the user.</summary>
     public int DisplayNumber => Index + 1;
 
     private string _label = $"POV {index + 1}";

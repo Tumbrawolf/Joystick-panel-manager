@@ -56,10 +56,11 @@ public sealed class StreamDockDevice : IPhysicalDevice
     // Guarded by _writeLock: the images the user wants on each button, and what's actually on
     // each image slot right now (null/missing = blank).
     private Dictionary<int, byte[]> _wantedImages = [];
+    private Dictionary<int, byte[]> _wantedPressedImages = [];
     private readonly Dictionary<byte, byte[]> _shownImages = [];
     private volatile bool _isConnected = true;
     private volatile bool _disposed;
-    private bool _vendorAppWasRunning;
+    private volatile bool _vendorAppWasRunning;
     private DateTime _lastHeartbeat = DateTime.MinValue;
 
     public Guid InstanceGuid { get; }
@@ -129,14 +130,16 @@ public sealed class StreamDockDevice : IPhysicalDevice
     }
 
     /// <summary>Sets the image on every key screen: a baseline JPEG of KeyImageSize x KeyImageSize
-    /// per button index; buttons left out are blanked. Only screens whose image actually changed
-    /// are redrawn. While VSD Craft is running nothing is sent (it owns the screens then); the
-    /// images are drawn when ClaudFlight takes the panel back.</summary>
-    public void SetButtonImages(IReadOnlyDictionary<int, byte[]> jpegByButton)
+    /// per button index; buttons left out are blanked. A key with a pressed image shows that
+    /// instead while it's held (swapped by this device as the press arrives). Only screens whose
+    /// image actually changed are redrawn. While VSD Craft is running nothing is sent (it owns the
+    /// screens then); the images are drawn when ClaudFlight takes the panel back.</summary>
+    public void SetButtonImages(IReadOnlyDictionary<int, byte[]> jpegByButton, IReadOnlyDictionary<int, byte[]>? pressedJpegByButton = null)
     {
         lock (_writeLock)
         {
             _wantedImages = new Dictionary<int, byte[]>(jpegByButton);
+            _wantedPressedImages = pressedJpegByButton is null ? [] : new Dictionary<int, byte[]>(pressedJpegByButton);
             if (_disposed || !_isConnected || IsVendorAppRunning()) return;
             if (SyncImages()) SendCrt("STP"u8);
         }
@@ -172,13 +175,20 @@ public sealed class StreamDockDevice : IPhysicalDevice
     private bool SyncImages()
     {
         byte?[] slots;
-        lock (_stateLock) slots = [.. _imageSlots];
+        bool[] pressed;
+        lock (_stateLock)
+        {
+            slots = [.. _imageSlots];
+            pressed = _pressed[..slots.Length];
+        }
 
         var changed = false;
         for (var index = 0; index < slots.Length; index++)
         {
             if (slots[index] is not { } slot) continue;
-            var wanted = _wantedImages.GetValueOrDefault(index);
+            var wanted = pressed[index] && _wantedPressedImages.TryGetValue(index, out var pressedImage)
+                ? pressedImage
+                : _wantedImages.GetValueOrDefault(index);
             var shown = _shownImages.GetValueOrDefault(slot);
             if (wanted is null ? shown is null : shown is not null && wanted.AsSpan().SequenceEqual(shown)) continue;
 
@@ -303,6 +313,17 @@ public sealed class StreamDockDevice : IPhysicalDevice
         }
 
         if (added) Changed?.Invoke();
+        else RedrawForPress();
+    }
+
+    /// <summary>Swaps a key between its normal and pressed image as it's pressed/released.</summary>
+    private void RedrawForPress()
+    {
+        lock (_writeLock)
+        {
+            if (_wantedPressedImages.Count == 0 || _disposed || !_isConnected || _vendorAppWasRunning) return;
+            if (SyncImages()) SendCrt("STP"u8);
+        }
     }
 
     private void SendCrt(ReadOnlySpan<byte> command)
