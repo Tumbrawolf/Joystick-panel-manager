@@ -5,6 +5,9 @@ namespace ClaudFlight.App.ViewModels;
 
 public sealed class DeviceMonitorViewModel(Guid deviceGuid, string deviceName) : ObservableBase
 {
+    /// <summary>What a screen reader says for this item in a list.</summary>
+    public override string ToString() => Label;
+
     public Guid DeviceGuid { get; } = deviceGuid;
     public string DeviceName { get; } = deviceName;
 
@@ -86,10 +89,24 @@ public sealed class DeviceMonitorViewModel(Guid deviceGuid, string deviceName) :
         ControlKind.Pov => Povs.FirstOrDefault(p => p.Index == index),
         _ => null,
     };
+
+    /// <summary>Every control this device shows, axes then buttons then hats, each with every part
+    /// that can be mapped on its own (the whole control, plus hat directions / axis halves).</summary>
+    public IEnumerable<(INamedControl Control, InputPart Part)> ControlParts()
+    {
+        IEnumerable<INamedControl> controls = [.. Axes, .. Buttons, .. Povs];
+        foreach (var control in controls)
+        {
+            foreach (var part in InputParts.For(control.Kind)) yield return (control, part);
+        }
+    }
 }
 
 /// <summary>A detected device the user has hidden from view - listed so it can be brought back.</summary>
-public sealed record HiddenDeviceViewModel(Guid DeviceGuid, string Name);
+public sealed record HiddenDeviceViewModel(Guid DeviceGuid, string Name)
+{
+    public override string ToString() => Name;
+}
 
 /// <summary>An axis/button/POV hidden from view on an otherwise-visible device.</summary>
 public sealed record HiddenControlViewModel(ControlKind Kind, int Index, string Label)
@@ -99,6 +116,8 @@ public sealed record HiddenControlViewModel(ControlKind Kind, int Index, string 
 
 public sealed class AxisReadingViewModel(Guid deviceGuid, AxisType axis) : ObservableBase, INamedControl
 {
+    public override string ToString() => Label;
+
     public Guid DeviceGuid { get; } = deviceGuid;
     public AxisType Axis { get; } = axis;
     public ControlKind Kind => ControlKind.Axis;
@@ -128,6 +147,8 @@ public sealed class AxisReadingViewModel(Guid deviceGuid, AxisType axis) : Obser
 
 public sealed class ButtonReadingViewModel(Guid deviceGuid, int index) : ObservableBase, INamedControl
 {
+    public override string ToString() => Label;
+
     public Guid DeviceGuid { get; } = deviceGuid;
     public int Index { get; } = index;
     public ControlKind Kind => ControlKind.Button;
@@ -215,6 +236,8 @@ public sealed record AxisModeOption(string Label, AxisReportMode Mode, AxisType 
 /// continuous scroll-style axis.</summary>
 public sealed class AxisModeRowViewModel(Guid deviceGuid, AxisType nativeAxis, string nativeLabel) : ObservableBase
 {
+    public override string ToString() => NativeLabel;
+
     public Guid DeviceGuid { get; } = deviceGuid;
     public AxisType NativeAxis { get; } = nativeAxis;
     public string NativeLabel { get; } = nativeLabel;
@@ -242,6 +265,8 @@ public sealed class AxisModeRowViewModel(Guid deviceGuid, AxisType nativeAxis, s
 
 public sealed class PovReadingViewModel(Guid deviceGuid, int index) : ObservableBase, INamedControl
 {
+    public override string ToString() => Label;
+
     public Guid DeviceGuid { get; } = deviceGuid;
     public int Index { get; } = index;
     public ControlKind Kind => ControlKind.Pov;

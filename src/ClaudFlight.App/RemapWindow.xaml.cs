@@ -15,7 +15,10 @@ public sealed record RemapSlot(Guid DeviceGuid, ControlKind Kind, int Index, Inp
 }
 
 /// <summary>Something a slot currently does: a vJoy Binding or a KeyBinding, described for display.</summary>
-public sealed record RemapOutput(string Description, object Source, bool Shifted);
+public sealed record RemapOutput(string Description, object Source, bool Shifted)
+{
+    public override string ToString() => Description;
+}
 
 /// <summary>What the connected vJoy device offers, or Available = false when vJoy isn't installed
 /// (in which case every slot is offered).</summary>
@@ -28,9 +31,16 @@ public partial class RemapWindow : Window
 {
     private enum OutputType { VJoyButton, VJoyAxis, VJoyHat, Key, Nudge }
 
-    private sealed record Option<T>(string Display, T Value);
+    // ToString is what screen readers say for a dropdown entry.
+    private sealed record Option<T>(string Display, T Value)
+    {
+        public override string ToString() => Display;
+    }
 
-    private sealed record TargetOption(string Display, int Index, bool InUse);
+    private sealed record TargetOption(string Display, int Index, bool InUse)
+    {
+        public override string ToString() => Display;
+    }
 
     private readonly MainWindow _host;
     private readonly RemapSlot _slot;

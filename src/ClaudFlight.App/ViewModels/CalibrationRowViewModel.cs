@@ -11,6 +11,9 @@ namespace ClaudFlight.App.ViewModels;
 /// effect live while dragging.</summary>
 public sealed class CalibrationRowViewModel : ObservableBase
 {
+    /// <summary>What a screen reader says for this item in a list.</summary>
+    public override string ToString() => $"{Device.Label} {AxisVm.Label}";
+
     private readonly MappingEngine _engine;
 
     public DeviceMonitorViewModel Device { get; }
