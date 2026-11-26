@@ -12,7 +12,7 @@ public enum VJoyDeviceStatus
 }
 
 /// <summary>Raw P/Invoke bindings to vJoyInterface.dll (vJoy SDK). Requires the vJoy driver
-/// (https://sourceforge.net/projects/vjoystick/) to be installed; otherwise every call throws
+/// (https://github.com/BrunnerInnovation/vJoy/releases) to be installed; otherwise every call throws
 /// DllNotFoundException, which callers should treat as "vJoy not available".</summary>
 internal static class VJoyNative
 {

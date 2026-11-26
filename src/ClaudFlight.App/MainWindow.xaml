@@ -61,7 +61,11 @@
         <!-- Status bar -->
         <Border DockPanel.Dock="Top" Background="#EEEEEE" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" Padding="8,4">
             <StackPanel Orientation="Horizontal">
-                <TextBlock x:Name="VJoyStatusText" Text="vJoy: checking..." VerticalAlignment="Center" Margin="0,0,16,0" />
+                <TextBlock x:Name="VJoyStatusText" Text="vJoy: checking..." VerticalAlignment="Center" Margin="0,0,8,0" />
+                <TextBlock x:Name="VJoyInstallLink" VerticalAlignment="Center" Margin="0,0,16,0" Visibility="Collapsed"
+                           ToolTip="Opens the download page for vJoy 2.2.2.0 (BrunnerInnovation), a signed build that installs on Windows 10 and 11. The older SourceForge vJoy often fails to install on Windows 11. Install it, run Configure vJoy once, then restart ClaudFlight.">
+                    <Hyperlink NavigateUri="https://github.com/BrunnerInnovation/vJoy/releases" RequestNavigate="Hyperlink_RequestNavigate">Get vJoy for Windows 10/11</Hyperlink>
+                </TextBlock>
                 <Button Content="Refresh Devices" Click="RefreshDevices_Click" Padding="8,2" />
                 <CheckBox x:Name="KeyboardInjectionToggle" Content="Keyboard keys on" VerticalAlignment="Center" FontWeight="Bold" Margin="16,0,0,0"
                           Checked="KeyboardInjectionToggle_Changed" Unchecked="KeyboardInjectionToggle_Changed"
@@ -464,9 +468,12 @@
 
                             <TextBlock TextWrapping="Wrap" FontWeight="Bold" Text="One-time setup (outside this app)" Margin="0,0,0,2" />
                             <TextBlock TextWrapping="Wrap" Margin="0,0,0,8">
-                                1. Install vJoy from
-                                <Hyperlink NavigateUri="https://sourceforge.net/projects/vjoystick/" RequestNavigate="Hyperlink_RequestNavigate">sourceforge.net/projects/vjoystick</Hyperlink>
-                                (the status bar above shows whether this app can currently see it).
+                                1. Install vJoy - on Windows 10/11 use the signed build from
+                                <Hyperlink NavigateUri="https://github.com/BrunnerInnovation/vJoy/releases" RequestNavigate="Hyperlink_RequestNavigate">github.com/BrunnerInnovation/vJoy</Hyperlink>
+                                (or 2.1.9.1 from
+                                <Hyperlink NavigateUri="https://github.com/jshafer817/vJoy/releases" RequestNavigate="Hyperlink_RequestNavigate">github.com/jshafer817/vJoy</Hyperlink>
+                                if that one won't install). The older SourceForge release often fails to install on Windows 11.
+                                The status bar above shows whether this app can currently see it; restart the app after installing.
                                 <LineBreak /><LineBreak />
                                 2. Run "Configure vJoy" from the Start Menu (installed alongside the driver) and set how many
                                 axes, buttons, and POVs vJoy device 1 should have. If unsure, enable all 8 axes and a generous

@@ -5,7 +5,7 @@ A Windows desktop app for monitoring, calibrating, renaming, and remapping fligh
 software like Thrustmaster's T.A.R.G.E.T.
 
 It reads your physical devices via DirectInput and can combine several of them into one virtual
-controller (via [vJoy](https://sourceforge.net/projects/vjoystick/)) that games see as a single
+controller (via [vJoy](https://github.com/BrunnerInnovation/vJoy/releases)) that games see as a single
 joystick, plus optionally simulate keyboard key presses from any axis/button/POV.
 
 ## Features
@@ -40,7 +40,7 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
 - **Axis trim from buttons** — a button can nudge a vJoy axis up or down (smoothly while held, or
   a step per press) or snap it back to center - for trim wheels, zoom, or a throttle on a stick
   with no lever.
-- **Mapping** — combine multiple physical devices into one or more virtual [vJoy](https://sourceforge.net/projects/vjoystick/)
+- **Mapping** — combine multiple physical devices into one or more virtual [vJoy](https://github.com/BrunnerInnovation/vJoy/releases)
   controllers that games bind to, and/or have any control press keyboard keys (for games or
   functions that take keyboard input but not joystick input). Every change goes through one remap
   window, which you can open from wherever you are: right-click a control on **Live Monitor**,
@@ -66,15 +66,18 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
 - Windows 10/11 (uses DirectInput and Windows-only APIs).
 - [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) (or build from source
   with the .NET 9 SDK, which bundles everything needed).
-- [vJoy](https://sourceforge.net/projects/vjoystick/) — **only required if you want to use the
+- [vJoy](https://github.com/BrunnerInnovation/vJoy/releases) — **only required if you want to use the
   vJoy mappings** that combine devices into a virtual controller. Live Monitor, Calibration,
   renaming, the Layout tab and keyboard-key mappings all work without it.
 
 ## Quick start (new to this kind of tool)
 
-1. **Install vJoy** from [sourceforge.net/projects/vjoystick](https://sourceforge.net/projects/vjoystick/)
-   if you plan to combine multiple devices into one virtual controller. Skip this if you only want
-   to monitor/calibrate/rename your existing hardware, or only want to map controls to keyboard keys.
+1. **Install vJoy** if you plan to combine multiple devices into one virtual controller. On
+   Windows 10/11 use the signed 2.2.2.0 build from
+   [BrunnerInnovation/vJoy](https://github.com/BrunnerInnovation/vJoy/releases), or 2.1.9.1 from
+   [jshafer817/vJoy](https://github.com/jshafer817/vJoy/releases) if that one won't install; the
+   older SourceForge release often fails to install on Windows 11. Skip this if you only want to
+   monitor/calibrate/rename your existing hardware, or only want to map controls to keyboard keys.
 2. **Run "Configure vJoy"** (installed alongside the driver, from the Start Menu) once, and set how
    many axes/buttons/POVs vJoy device 1 should have. If unsure, enable all 8 axes and a generous
    button count (e.g. 32) — you can change this later.

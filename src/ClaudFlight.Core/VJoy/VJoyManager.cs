@@ -36,7 +36,7 @@ public sealed class VJoyManager : IDisposable, ClaudFlight.Core.Mapping.IVJoyOut
         }
         catch (DllNotFoundException)
         {
-            UnavailableReason = "vJoyInterface.dll not found. Install vJoy from https://sourceforge.net/projects/vjoystick/.";
+            UnavailableReason = "vJoyInterface.dll not found - vJoy isn't installed";
         }
         catch (BadImageFormatException)
         {

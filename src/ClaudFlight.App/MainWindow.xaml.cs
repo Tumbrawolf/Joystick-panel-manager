@@ -88,6 +88,7 @@ public partial class MainWindow : Window
         VJoyStatusText.Text = _vjoyManager.IsAvailable
             ? "vJoy: available"
             : $"vJoy: unavailable ({_vjoyManager.UnavailableReason})";
+        VJoyInstallLink.Visibility = _vjoyManager.IsAvailable ? Visibility.Collapsed : Visibility.Visible;
 
         // Auto-load whatever profile was active last time the app was closed, so renames,
         // calibration, and mappings persist across restarts without an explicit Load click.
