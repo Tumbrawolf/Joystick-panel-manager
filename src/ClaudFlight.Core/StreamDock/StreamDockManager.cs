@@ -11,16 +11,25 @@ namespace ClaudFlight.Core.StreamDock;
 /// (see StreamDockDevice for the protocol).</summary>
 public sealed partial class StreamDockManager : IDisposable
 {
-    /// <summary>VSD M18: 15 screen keys (codes 0x01-0x0F) and 3 side buttons (0x25, 0x30, 0x31),
-    /// as reported by a real panel. Which code sits at which physical position isn't documented,
-    /// so the names are just numbers - rename them in Live Monitor.</summary>
+    /// <summary>VSD M18: 15 screen keys (codes 0x01-0x0F, three rows of five) and 3 side buttons
+    /// with their own small screens (0x25, 0x30, 0x31), as reported by a real panel. The panel
+    /// numbers its image slots with the rows in the opposite order to its key codes (image slots
+    /// 1-5 show on keys 0x0B-0x0F, 11-15 on keys 0x01-0x05), and the side screens are slots
+    /// 0x10-0x12 - both checked by drawing numbers on every slot and pressing them in order.</summary>
     private static readonly StreamDockKey[] M18Layout =
     [
-        .. Enumerable.Range(1, 15).Select(i => new StreamDockKey((byte)i, $"Key {i}")),
-        new(0x25, "Side 1"),
-        new(0x30, "Side 2"),
-        new(0x31, "Side 3"),
+        .. Enumerable.Range(1, 15).Select(i => new StreamDockKey((byte)i, $"Key {i}", M18ImageSlot(i))),
+        new(0x25, "Side 1", 0x10),
+        new(0x30, "Side 2", 0x11),
+        new(0x31, "Side 3", 0x12),
     ];
+
+    private static byte M18ImageSlot(int code)
+    {
+        var row = (code - 1) / 5;
+        var column = (code - 1) % 5;
+        return (byte)((2 - row) * 5 + column + 1);
+    }
 
     /// <summary>Known panels: USB vendor ID, product ID, display name, key layout. A model whose
     /// layout is unknown can use an empty one: its keys are then added as they're pressed.</summary>

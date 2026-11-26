@@ -133,6 +133,22 @@ public sealed class ButtonReadingViewModel(Guid deviceGuid, int index) : Observa
         get => _isPressed;
         set => SetField(ref _isPressed, value);
     }
+
+    /// <summary>True if this button has its own screen (a StreamDock key) that can show a picture.</summary>
+    public bool HasScreen { get; init; }
+
+    private System.Windows.Media.ImageSource? _image;
+    /// <summary>Thumbnail of the picture on this button's screen, or null if it's blank.</summary>
+    public System.Windows.Media.ImageSource? Image
+    {
+        get => _image;
+        set
+        {
+            if (SetField(ref _image, value)) Raise(nameof(HasImage));
+        }
+    }
+
+    public bool HasImage => _image is not null;
 }
 
 /// <summary>One selectable way to expose a Raw Input mouse-style device's native axis: a

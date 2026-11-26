@@ -5,9 +5,9 @@ using Microsoft.Win32.SafeHandles;
 
 namespace ClaudFlight.Core.Devices;
 
-/// <summary>One physical control on a StreamDock panel: the key code the panel reports for it and
-/// the default name ClaudFlight shows.</summary>
-public sealed record StreamDockKey(byte Code, string Name);
+/// <summary>One physical control on a StreamDock panel: the key code the panel reports for it, the
+/// default name ClaudFlight shows, and the image slot of its screen (null if it has none).</summary>
+public sealed record StreamDockKey(byte Code, string Name, byte? ImageSlot = null);
 
 /// <summary>A Mirabox/HotSpot "StreamDock" panel (e.g. the VSD M18) driven directly over its
 /// vendor-defined HID interface, without its "VSD Craft" software. Each physical key is exposed as
@@ -17,6 +17,8 @@ public sealed record StreamDockKey(byte Code, string Name);
 /// Protocol (VSD Craft's own traffic, recorded from a real M18):
 /// - Output reports: report ID 0x00, then the command, zero-padded to the report length. Commands
 ///   start with "CRT\0\0" (e.g. "DIS" wake, "LIG" brightness, "CLE" clear, "STP" refresh).
+/// - Key images: "BAT" + length + image slot, then the raw JPEG (64x64, baseline) in report-sized
+///   chunks, then "STP" to show it (see SendImage).
 /// - Input reports: report ID 0x00, "ACK\0\0OK\0\0", then the key code and its state
 ///   (1 = down, 0 = up).
 /// - The panel only reports keys after a host has run its start-up sequence (see StartUp), and
@@ -49,6 +51,12 @@ public sealed class StreamDockDevice : IPhysicalDevice
     private readonly bool[] _pressed = new bool[MaxButtons];
     private readonly Dictionary<byte, int> _indexByCode = [];
     private readonly List<string> _buttonNames = [];
+    private readonly List<byte?> _imageSlots = [];
+
+    // Guarded by _writeLock: the images the user wants on each button, and what's actually on
+    // each image slot right now (null/missing = blank).
+    private Dictionary<int, byte[]> _wantedImages = [];
+    private readonly Dictionary<byte, byte[]> _shownImages = [];
     private volatile bool _isConnected = true;
     private volatile bool _disposed;
     private bool _vendorAppWasRunning;
@@ -88,6 +96,7 @@ public sealed class StreamDockDevice : IPhysicalDevice
         {
             _indexByCode[key.Code] = _buttonNames.Count;
             _buttonNames.Add(key.Name);
+            _imageSlots.Add(key.ImageSlot);
         }
 
         _stream = new FileStream(handle, FileAccess.ReadWrite, bufferSize: 0, isAsync: true);
@@ -110,22 +119,95 @@ public sealed class StreamDockDevice : IPhysicalDevice
         return new JoystickSnapshot { Axes = NoAxes, Buttons = buttons, PointOfViews = [] };
     }
 
+    /// <summary>Width and height, in pixels, of the JPEG each key screen takes.</summary>
+    public const int KeyImageSize = 64;
+
+    /// <summary>True if this button has its own screen that can show an image.</summary>
+    public bool HasKeyScreen(int buttonIndex)
+    {
+        lock (_stateLock) return buttonIndex >= 0 && buttonIndex < _imageSlots.Count && _imageSlots[buttonIndex] is not null;
+    }
+
+    /// <summary>Sets the image on every key screen: a baseline JPEG of KeyImageSize x KeyImageSize
+    /// per button index; buttons left out are blanked. Only screens whose image actually changed
+    /// are redrawn. While VSD Craft is running nothing is sent (it owns the screens then); the
+    /// images are drawn when ClaudFlight takes the panel back.</summary>
+    public void SetButtonImages(IReadOnlyDictionary<int, byte[]> jpegByButton)
+    {
+        lock (_writeLock)
+        {
+            _wantedImages = new Dictionary<int, byte[]>(jpegByButton);
+            if (_disposed || !_isConnected || IsVendorAppRunning()) return;
+            if (SyncImages()) SendCrt("STP"u8);
+        }
+    }
+
     /// <summary>VSD Craft's start-up sequence, byte for byte: read the firmware version, wake the
     /// screen, set brightness, two QUCMD configuration packets (the ones that switch key reporting
-    /// on), LED-bar setup, clear all keys, refresh.</summary>
+    /// on), LED-bar setup, clear all keys, refresh - plus redrawing ClaudFlight's own key images
+    /// after the clear.</summary>
     private void StartUp()
     {
-        HidNative.GetInputReport(_handle, _inputReportLength);
-        SendCrt("DIS\0\0\0"u8);
-        SendCrt([.. "LIG\0\0"u8, DefaultBrightness]);
-        SendCrt([.. "QUCMD"u8, 0x11, 0x11, 0x00, 0x11, 0x00, 0x11]);
-        SendCrt([.. "LBLIG"u8, 0x3C]);
-        SendCrt([.. "LBLIG"u8, 0x37]);
-        SendCrt("DELED"u8);
-        SendCrt([.. "QUCMD"u8, 0x1F]);
-        SendCrt([.. "CLE\0\0\0"u8, 0xFF]);
-        SendCrt("STP"u8);
-        _lastHeartbeat = DateTime.UtcNow;
+        lock (_writeLock)
+        {
+            HidNative.GetInputReport(_handle, _inputReportLength);
+            SendCrt("DIS\0\0\0"u8);
+            SendCrt([.. "LIG\0\0"u8, DefaultBrightness]);
+            SendCrt([.. "QUCMD"u8, 0x11, 0x11, 0x00, 0x11, 0x00, 0x11]);
+            SendCrt([.. "LBLIG"u8, 0x3C]);
+            SendCrt([.. "LBLIG"u8, 0x37]);
+            SendCrt("DELED"u8);
+            SendCrt([.. "QUCMD"u8, 0x1F]);
+            SendCrt([.. "CLE\0\0\0"u8, 0xFF]);
+            _shownImages.Clear();
+            SyncImages();
+            SendCrt("STP"u8);
+            _lastHeartbeat = DateTime.UtcNow;
+        }
+    }
+
+    /// <summary>Sends every key image that differs from what's on the panel (call with _writeLock
+    /// held, so a heartbeat can't land in the middle of an image's data). The panel only shows the
+    /// changes after an STP, which the caller sends. Returns true if anything was sent.</summary>
+    private bool SyncImages()
+    {
+        byte?[] slots;
+        lock (_stateLock) slots = [.. _imageSlots];
+
+        var changed = false;
+        for (var index = 0; index < slots.Length; index++)
+        {
+            if (slots[index] is not { } slot) continue;
+            var wanted = _wantedImages.GetValueOrDefault(index);
+            var shown = _shownImages.GetValueOrDefault(slot);
+            if (wanted is null ? shown is null : shown is not null && wanted.AsSpan().SequenceEqual(shown)) continue;
+
+            if (wanted is null)
+            {
+                SendCrt([.. "CLE\0\0\0"u8, slot]);
+                _shownImages.Remove(slot);
+            }
+            else
+            {
+                SendImage(slot, wanted);
+                _shownImages[slot] = wanted;
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    /// <summary>"BAT" + the JPEG's length (4 bytes, big-endian) + the image slot, then the JPEG
+    /// itself in raw report-sized chunks with no header.</summary>
+    private void SendImage(byte slot, byte[] jpeg)
+    {
+        var length = jpeg.Length;
+        SendCrt([.. "BAT"u8, (byte)(length >> 24), (byte)(length >> 16), (byte)(length >> 8), (byte)length, slot]);
+        var chunkSize = _outputReportLength - 1;
+        for (var offset = 0; offset < length; offset += chunkSize)
+        {
+            SendRaw(jpeg.AsSpan(offset, Math.Min(chunkSize, length - offset)));
+        }
     }
 
     private void OnTimer()
@@ -214,6 +296,7 @@ public sealed class StreamDockDevice : IPhysicalDevice
                 index = _buttonNames.Count;
                 _indexByCode[code] = index;
                 _buttonNames.Add($"Code 0x{code:X2}");
+                _imageSlots.Add(null);
                 added = true;
             }
             _pressed[index] = isDown;

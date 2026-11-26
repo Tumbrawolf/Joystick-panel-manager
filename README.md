@@ -126,9 +126,13 @@ their settings even if moved to a different port.
   reads that protocol directly, so the M18's 15 screen keys and 3 side buttons show up as regular
   buttons ("Key 1"-"Key 15", "Side 1"-"Side 3") that can be renamed, mapped to vJoy, or bound
   to a keystroke. **VSD Craft isn't needed**: ClaudFlight sends the panel the same start-up
-  sequence VSD Craft does, which switches its key reporting on (the keys' screens are left
-  blank). If VSD Craft is running anyway, ClaudFlight stays quiet and just listens alongside it,
-  and takes over again when VSD Craft quits. Which key number sits at which physical position isn't documented,
+  sequence VSD Craft does, which switches its key reporting on. To put a picture on a key's
+  screen, right-click the key in Live Monitor and choose **Set image...** (or drop a picture file
+  onto it); any common image format works and is fitted onto the key's 64x64 screen. Pictures are
+  saved in the profile, travel with a device Export/Import, and are redrawn whenever ClaudFlight
+  connects to the panel. If VSD Craft is running anyway, ClaudFlight stays quiet and just listens
+  alongside it (VSD Craft's own pictures stay on the keys), and takes over again - redrawing
+  ClaudFlight's pictures - when VSD Craft quits. Which key number sits at which physical position isn't documented,
   so press each key in Live Monitor to see its number and rename it. Other StreamDock models can
   be added to the `SupportedDevices` list in `StreamDockManager` once their USB IDs are known.
 - Other programmable panels with their own proprietary protocol can't be captured directly. If

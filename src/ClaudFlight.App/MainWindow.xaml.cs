@@ -287,7 +287,11 @@ public partial class MainWindow : Window
                     vm.HiddenControls.Add(new HiddenControlViewModel(ControlKind.Button, i, GetSavedLabel(device.InstanceGuid, ControlKind.Button, i, defaultButtonLabel)));
                     continue;
                 }
-                vm.Buttons.Add(new ButtonReadingViewModel(device.InstanceGuid, i) { Label = defaultButtonLabel });
+                vm.Buttons.Add(new ButtonReadingViewModel(device.InstanceGuid, i)
+                {
+                    Label = defaultButtonLabel,
+                    HasScreen = device is StreamDockDevice streamDock && streamDock.HasKeyScreen(i),
+                });
             }
             for (var i = 0; i < device.PovCount; i++)
             {
@@ -313,6 +317,7 @@ public partial class MainWindow : Window
         Devices.Clear();
         foreach (var vm in ordered) Devices.Add(vm);
 
+        ApplyButtonImages();
         RebuildCalibrationRows();
         RefreshMappingFormOptions();
         RefreshKeySourceControlOptions();
@@ -368,6 +373,70 @@ public partial class MainWindow : Window
 
         _currentProfile.ExcludedControls.Add(new ExcludedControlEntry { DeviceGuid = control.DeviceGuid, Kind = control.Kind, Index = control.ControlIndex });
         RefreshDevices();
+    }
+
+    private const string ImageFileFilter =
+        "Images (*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.ico)|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.tif;*.tiff;*.ico|All files (*.*)|*.*";
+
+    /// <summary>Right-click "Set image..." on a button that has its own screen (a StreamDock key).</summary>
+    private void SetButtonImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel { HasScreen: true } button }) return;
+
+        var dialog = new OpenFileDialog { Title = $"Picture for '{button.Label}'", Filter = ImageFileFilter };
+        if (dialog.ShowDialog(this) != true) return;
+
+        SetButtonImage(button, dialog.FileName);
+    }
+
+    private void ClearButtonImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel button }) return;
+
+        _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == button.DeviceGuid && i.ButtonIndex == button.Index);
+        ApplyButtonImages();
+    }
+
+    private void SetButtonImage(ButtonReadingViewModel button, string path)
+    {
+        byte[] jpeg;
+        try
+        {
+            jpeg = KeyImages.FromFile(path, StreamDockDevice.KeyImageSize);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, $"Couldn't use that file as a picture:\n{ex.Message}", "Set image", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == button.DeviceGuid && i.ButtonIndex == button.Index);
+        _currentProfile.ButtonImages.Add(new ButtonImageEntry { DeviceGuid = button.DeviceGuid, ButtonIndex = button.Index, Jpeg = jpeg });
+        ApplyButtonImages();
+    }
+
+    /// <summary>Sends the current profile's button pictures to every connected StreamDock panel
+    /// (each only redraws the keys that changed) and shows them on the Live Monitor tiles.</summary>
+    private void ApplyButtonImages()
+    {
+        foreach (var device in _streamDockManager.Devices.OfType<StreamDockDevice>())
+        {
+            var images = new Dictionary<int, byte[]>();
+            foreach (var entry in _currentProfile.ButtonImages.Where(i => i.DeviceGuid == device.InstanceGuid))
+            {
+                if (device.HasKeyScreen(entry.ButtonIndex)) images[entry.ButtonIndex] = entry.Jpeg;
+            }
+            device.SetButtonImages(images);
+        }
+
+        foreach (var device in Devices)
+        {
+            foreach (var button in device.Buttons.Where(b => b.HasScreen))
+            {
+                var entry = _currentProfile.ButtonImages.LastOrDefault(i => i.DeviceGuid == device.DeviceGuid && i.ButtonIndex == button.Index);
+                button.Image = entry is null ? null : KeyImages.ToThumbnail(entry.Jpeg);
+            }
+        }
     }
 
     private void RestoreControl_Click(object sender, RoutedEventArgs e)
@@ -541,6 +610,7 @@ public partial class MainWindow : Window
             ExcludedControls = _currentProfile.ExcludedControls.Where(c => c.DeviceGuid == guid).ToList(),
             Bindings = _currentProfile.Bindings.Where(b => b.Source.DeviceGuid == guid).ToList(),
             KeyBindings = _currentProfile.KeyBindings.Where(k => k.Source.DeviceGuid == guid).ToList(),
+            ButtonImages = _currentProfile.ButtonImages.Where(i => i.DeviceGuid == guid).ToList(),
         };
     }
 
@@ -619,6 +689,12 @@ public partial class MainWindow : Window
             });
         }
 
+        foreach (var image in imported.ButtonImages.Where(i => i.DeviceGuid == sourceGuid))
+        {
+            _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == targetGuid && i.ButtonIndex == image.ButtonIndex);
+            _currentProfile.ButtonImages.Add(new ButtonImageEntry { DeviceGuid = targetGuid, ButtonIndex = image.ButtonIndex, Jpeg = image.Jpeg });
+        }
+
         _engine.LoadProfile(_currentProfile);
         RefreshDevices();
         RebuildBindingRowsFromProfile();
@@ -633,6 +709,7 @@ public partial class MainWindow : Window
         if (profile.ExcludedControls.Count > 0) return profile.ExcludedControls[0].DeviceGuid;
         if (profile.Bindings.Count > 0) return profile.Bindings[0].Source.DeviceGuid;
         if (profile.KeyBindings.Count > 0) return profile.KeyBindings[0].Source.DeviceGuid;
+        if (profile.ButtonImages.Count > 0) return profile.ButtonImages[0].DeviceGuid;
         return null;
     }
 
@@ -703,6 +780,17 @@ public partial class MainWindow : Window
 
     private void ButtonLamp_Drop(object sender, DragEventArgs e)
     {
+        // A picture file dragged in from Explorer onto a key that has its own screen.
+        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        {
+            if (sender is FrameworkElement { DataContext: ButtonReadingViewModel { HasScreen: true } screenButton } &&
+                e.Data.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } files)
+            {
+                SetButtonImage(screenButton, files[0]);
+            }
+            return;
+        }
+
         if (!e.Data.GetDataPresent(typeof(ButtonReadingViewModel))) return;
         if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel targetButton }) return;
         if (e.Data.GetData(typeof(ButtonReadingViewModel)) is not ButtonReadingViewModel draggedButton) return;
@@ -1002,6 +1090,7 @@ public partial class MainWindow : Window
         KeyBindingRows.Clear();
         _engine.LoadProfile(_currentProfile);
         RebuildCalibrationRows();
+        ApplyButtonImages();
         ProfileNameBox.Text = _currentProfile.Name;
     }
 
@@ -1091,6 +1180,7 @@ public partial class MainWindow : Window
         RebuildBindingRowsFromProfile();
         RebuildKeyBindingRowsFromProfile();
         RebuildCalibrationRows();
+        ApplyButtonImages();
         ProfileNameBox.Text = _currentProfile.Name;
     }
 
