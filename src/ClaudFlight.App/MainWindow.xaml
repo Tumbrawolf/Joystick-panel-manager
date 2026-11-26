@@ -138,11 +138,11 @@
                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontWeight="Bold" Margin="0,0,0,8" />
 
                                         <StackPanel Margin="0,0,0,8" Visibility="{Binding HasKeyScreens, Converter={StaticResource BoolToVisibility}}">
-                                            <CheckBox Content="Show names on keys without a picture" IsChecked="{Binding ShowKeyNames}" Click="KeyScreenOption_Click" FontSize="11"
+                                            <CheckBox Content="Show names on keys without a picture" IsChecked="{Binding ShowKeyNames}" FontSize="11"
                                                       ToolTip="Keys with no picture of their own show their name (as typed under the key below) and what they're mapped to." />
-                                            <CheckBox Content="Light up keys while pressed" IsChecked="{Binding HighlightPressedKeys}" Click="KeyScreenOption_Click" FontSize="11" Margin="0,2,0,0"
+                                            <CheckBox Content="Light up keys while pressed" IsChecked="{Binding HighlightPressedKeys}" FontSize="11" Margin="0,2,0,0"
                                                       ToolTip="Keys with no pressed picture of their own get a bright frame while held." />
-                                            <CheckBox Content="Show latched keys and the shift layer" IsChecked="{Binding ShowKeyState}" Click="KeyScreenOption_Click" FontSize="11" Margin="0,2,0,0"
+                                            <CheckBox Content="Show latched keys and the shift layer" IsChecked="{Binding ShowKeyState}" FontSize="11" Margin="0,2,0,0"
                                                       ToolTip="Keys with a latching mapping stay lit while it's latched on, and keys showing names switch to their shifted mappings while the shift control is held." />
                                         </StackPanel>
 

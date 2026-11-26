@@ -82,12 +82,23 @@ public sealed class ProfileStore
             return;
         }
         Save(profile);
-        Delete(oldName);
+        File.Delete(PathFor(oldName)); // just the file - Delete would take the backups with it
 
-        // Its backups go with it (unless the new name already has some of its own).
+        // Its backups go with it (merged in, should the new name have a folder already).
         var oldBackups = BackupFolderFor(oldName);
         var newBackups = BackupFolderFor(newName);
-        if (Directory.Exists(oldBackups) && !Directory.Exists(newBackups)) Directory.Move(oldBackups, newBackups);
+        if (!Directory.Exists(oldBackups) || string.Equals(oldBackups, newBackups, StringComparison.OrdinalIgnoreCase)) return;
+        if (!Directory.Exists(newBackups))
+        {
+            Directory.Move(oldBackups, newBackups);
+            return;
+        }
+        foreach (var file in Directory.EnumerateFiles(oldBackups, "*.json"))
+        {
+            var target = Path.Combine(newBackups, Path.GetFileName(file));
+            if (!File.Exists(target)) File.Move(file, target);
+        }
+        Directory.Delete(oldBackups, recursive: true);
     }
 
     // ---- Backups: earlier versions of each profile, kept in Backups\<name>\ ----
@@ -105,7 +116,9 @@ public sealed class ProfileStore
         if (!File.Exists(source)) return false;
         var time = now ?? DateTime.Now;
         var existing = ListBackups(name);
-        if (existing.Count > 0 && time - existing[0].Time < minimumGap) return false;
+        // A newest backup "in the future" means the clock went back (e.g. daylight saving ended):
+        // don't wait for real time to catch up with it.
+        if (existing.Count > 0 && time >= existing[0].Time && time - existing[0].Time < minimumGap) return false;
 
         var folder = BackupFolderFor(name);
         Directory.CreateDirectory(folder);
@@ -146,10 +159,14 @@ public sealed class ProfileStore
     /// <summary>True if both names map to the same profile file (e.g. they differ only in capitals).</summary>
     public bool IsSameProfile(string a, string b) => string.Equals(PathFor(a), PathFor(b), StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Deletes the profile and its backups, so a new profile given the same name later
+    /// doesn't inherit them.</summary>
     public void Delete(string name)
     {
         var path = PathFor(name);
         if (File.Exists(path)) File.Delete(path);
+        var backups = BackupFolderFor(name);
+        if (Directory.Exists(backups)) Directory.Delete(backups, recursive: true);
     }
 
     /// <summary>Loads a profile from an arbitrary file path (as opposed to Load(name), which only

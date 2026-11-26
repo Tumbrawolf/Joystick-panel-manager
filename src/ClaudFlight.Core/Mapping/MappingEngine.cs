@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using ClaudFlight.Core.Devices;
 using ClaudFlight.Core.Keyboard;
 using ClaudFlight.Core.Models;
@@ -45,6 +46,9 @@ public sealed class MappingEngine
     private Dictionary<(Guid, AxisType), AxisCalibration> _calibrations = [];
     private HashSet<(Guid, ControlKind, int, InputPart)> _shiftedSlots = [];
 
+    /// <summary>Inputs with a double-tap mapping: their short-press mappings wait to rule out a double tap.</summary>
+    private HashSet<(Guid, ControlKind, int, InputPart)> _doubleTapSlots = [];
+
     private sealed class SwitchState
     {
         public bool LastRaw;
@@ -65,6 +69,13 @@ public sealed class MappingEngine
         public double LastTapAt = double.NegativeInfinity;
         public bool SecondTap;
         public double PulseUntil = double.MinValue;
+
+        /// <summary>Short press only: when a short press was let go while waiting to see whether it's
+        /// the first tap of a double tap (NaN when not waiting).</summary>
+        public double ShortPending = double.NaN;
+
+        /// <summary>Short press only: this press is a double tap's second tap, so its release isn't a short press.</summary>
+        public bool SkipRelease;
     }
 
     private sealed record PendingKey(double At, int VKey, bool Down);
@@ -120,12 +131,44 @@ public sealed class MappingEngine
         foreach (var binding in profile.Bindings.Where(b => b.Shifted)) _shiftedSlots.Add(SlotOf(binding));
         foreach (var keyBinding in profile.KeyBindings.Where(k => k.Shifted)) _shiftedSlots.Add(SlotOf(keyBinding));
 
-        // Keep switch state (latches, pulses in flight) for bindings that survived the reload.
-        var kept = new HashSet<Binding>(profile.Bindings);
-        _switchStates = _switchStates.Where(s => kept.Contains(s.Key)).ToDictionary(s => s.Key, s => s.Value);
-        var keptOutputs = new HashSet<object>([.. profile.Bindings, .. profile.KeyBindings]);
-        _triggerStates = _triggerStates.Where(s => keptOutputs.Contains(s.Key)).ToDictionary(s => s.Key, s => s.Value);
+        _doubleTapSlots = [];
+        foreach (var binding in profile.Bindings.Where(b => b.Trigger == PressTrigger.DoubleTap)) _doubleTapSlots.Add(SlotOf(binding));
+        foreach (var keyBinding in profile.KeyBindings.Where(k => k.Trigger == PressTrigger.DoubleTap)) _doubleTapSlots.Add(SlotOf(keyBinding));
+
+        // Keep switch state (latches, pulses in flight) for mappings that survived the reload - the
+        // same object, or failing that an identical copy (undo, or a profile read back from disk), so
+        // reloading never lets go of a latched output by itself.
+        _switchStates = CarryOver(_switchStates, profile.Bindings);
+        _triggerStates = CarryOver(_triggerStates, profile.Bindings.Cast<object>().Concat(profile.KeyBindings));
+        LatchVersion++;
     }
+
+    /// <summary>The states of the current mappings: each keeps its own, else takes an identical
+    /// old mapping's (matched by content), else starts fresh.</summary>
+    private static Dictionary<TKey, TValue> CarryOver<TKey, TValue>(Dictionary<TKey, TValue> old, IEnumerable<TKey> current) where TKey : notnull
+    {
+        var result = new Dictionary<TKey, TValue>();
+        var unmatched = new List<TKey>();
+        foreach (var key in current)
+        {
+            if (old.Remove(key, out var value)) result[key] = value;
+            else unmatched.Add(key);
+        }
+        if (unmatched.Count == 0 || old.Count == 0) return result;
+
+        var byContent = old.GroupBy(p => ContentKey(p.Key)).ToDictionary(g => g.Key, g => new Queue<TValue>(g.Select(p => p.Value)));
+        foreach (var key in unmatched)
+        {
+            if (byContent.TryGetValue(ContentKey(key), out var queue) && queue.Count > 0) result[key] = queue.Dequeue();
+        }
+        return result;
+    }
+
+    private static string ContentKey(object mapping) => mapping.GetType().Name + JsonSerializer.Serialize(mapping, mapping.GetType());
+
+    /// <summary>Changes whenever a latch flips or the profile is reloaded, so a view of LatchedSlots
+    /// can tell cheaply when to look again.</summary>
+    public int LatchVersion { get; private set; }
 
     /// <summary>Whether the shift control was held at the last tick.</summary>
     public bool ShiftHeld { get; private set; }
@@ -220,7 +263,7 @@ public sealed class MappingEngine
                 default:
                     var raw = IsOn(snap, binding.Source.DeviceGuid, binding.Source.Kind, binding.Source.Index, binding.Part,
                         binding.AxisThreshold, binding.ZoneFrom, binding.ZoneTo);
-                    raw = ApplyTrigger(binding, binding.Trigger, raw, now);
+                    raw = ApplyTrigger(binding, binding.Trigger, raw, now, SlotOf(binding));
                     var pressed = ApplySwitchMode(binding, raw, inLayer, now);
                     var key = (binding.Target.VJoyDeviceId, binding.Target.Index);
                     buttonAgg[key] = buttonAgg.TryGetValue(key, out var existing) ? existing || pressed : pressed;
@@ -296,8 +339,9 @@ public sealed class MappingEngine
     /// <summary>Turns an on/off input into "pressed" as one mapping's trigger sees it: straight
     /// through, or only a short press (a pulse once it's let go), a long press (once held long
     /// enough), or a double tap (the second press). A press already held when the mapping is first
-    /// seen never counts.</summary>
-    private bool ApplyTrigger(object output, PressTrigger trigger, bool raw, double now)
+    /// seen never counts. On an input that also has a double-tap mapping, a short press waits
+    /// DoubleTapSeconds after it's let go, and doesn't fire if that turns out to be a double tap.</summary>
+    private bool ApplyTrigger(object output, PressTrigger trigger, bool raw, double now, (Guid, ControlKind, int, InputPart) slot)
     {
         if (trigger == PressTrigger.Press) return raw;
 
@@ -317,9 +361,28 @@ public sealed class MappingEngine
                 return raw && !double.IsNaN(state.PressedAt) && now - state.PressedAt >= LongPressSeconds;
 
             case PressTrigger.ShortPress:
-                if (falling && !double.IsNaN(state.PressedAt) && now - state.PressedAt < LongPressSeconds) state.PulseUntil = now + PulseSeconds;
-                if (falling) state.PressedAt = double.NaN;
+            {
+                if (rising && !double.IsNaN(state.ShortPending))
+                {
+                    // Pressed again in time: a double tap, not a short press.
+                    state.ShortPending = double.NaN;
+                    state.SkipRelease = true;
+                }
+                if (falling)
+                {
+                    var wasShort = !double.IsNaN(state.PressedAt) && now - state.PressedAt < LongPressSeconds;
+                    if (state.SkipRelease) state.SkipRelease = false;
+                    else if (wasShort && _doubleTapSlots.Contains(slot)) state.ShortPending = now;
+                    else if (wasShort) state.PulseUntil = now + PulseSeconds;
+                    state.PressedAt = double.NaN;
+                }
+                if (!double.IsNaN(state.ShortPending) && now - state.ShortPending > DoubleTapSeconds)
+                {
+                    state.ShortPending = double.NaN;
+                    state.PulseUntil = now + PulseSeconds;
+                }
                 return now < state.PulseUntil;
+            }
 
             case PressTrigger.DoubleTap:
                 if (rising)
@@ -362,7 +425,11 @@ public sealed class MappingEngine
                 if ((rising || falling) && inLayer) state.PulseUntil = now + PulseSeconds;
                 return now < state.PulseUntil;
             case SwitchMode.Latch:
-                if (rising && inLayer) state.Latched = !state.Latched;
+                if (rising && inLayer)
+                {
+                    state.Latched = !state.Latched;
+                    LatchVersion++;
+                }
                 return state.Latched;
             default:
                 return raw && inLayer;
@@ -373,7 +440,7 @@ public sealed class MappingEngine
     {
         var raw = IsOn(snap, binding.Source.DeviceGuid, binding.Source.Kind, binding.Source.Index, binding.Part,
             binding.AxisThreshold, binding.ZoneFrom, binding.ZoneTo);
-        raw = ApplyTrigger(binding, binding.Trigger, raw, now);
+        raw = ApplyTrigger(binding, binding.Trigger, raw, now, SlotOf(binding));
 
         if (!_switchStates.TryGetValue(binding, out var state))
         {
@@ -444,7 +511,7 @@ public sealed class MappingEngine
             var part = InputParts.Of(keyBinding);
             var raw = IsOn(snap, keyBinding.Source.DeviceGuid, keyBinding.Source.Kind, keyBinding.Source.Index, part,
                 keyBinding.AxisThreshold, keyBinding.ZoneFrom, keyBinding.ZoneTo);
-            raw = ApplyTrigger(keyBinding, keyBinding.Trigger, raw, now);
+            raw = ApplyTrigger(keyBinding, keyBinding.Trigger, raw, now, SlotOf(keyBinding));
             var inLayer = keyBinding.Shifted == (shiftHeld && _shiftedSlots.Contains(SlotOf(keyBinding)));
             var holds = !isSequence && (keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed);
 
@@ -467,19 +534,26 @@ public sealed class MappingEngine
             {
                 var shouldHold = raw && inLayer;
                 if (shouldHold && !state.Holding) _keys.KeyDown(keyBinding.VirtualKeyCode);
-                else if (!shouldHold && state.Holding) _keys.KeyUp(keyBinding.VirtualKeyCode);
+                else if (!shouldHold && state.Holding && !KeyHeldElsewhere(keyBinding.VirtualKeyCode, keyBinding)) _keys.KeyUp(keyBinding.VirtualKeyCode);
                 state.Holding = shouldHold;
             }
             else if (inLayer && (rising || (falling && keyBinding.TapOnRelease)))
             {
-                // Tap: a single down+up on the edge rather than holding the key down.
+                // Tap: a single down+up on the edge rather than holding the key down (the up is
+                // left out if another mapping is holding that key, so it stays held).
                 _keys.KeyDown(keyBinding.VirtualKeyCode);
-                _keys.KeyUp(keyBinding.VirtualKeyCode);
+                if (!KeyHeldElsewhere(keyBinding.VirtualKeyCode, keyBinding)) _keys.KeyUp(keyBinding.VirtualKeyCode);
             }
         }
     }
 
     private static bool IsCatalogKey(int virtualKeyCode) => KeyCatalog.Keys.Any(k => k.VKey == virtualKeyCode);
+
+    /// <summary>True if a hold mapping (other than except) or a playing sequence has the key down,
+    /// so letting go of it now would cut that one short.</summary>
+    private bool KeyHeldElsewhere(int vkey, KeyBinding? except = null) =>
+        _sequenceKeysDown.ContainsKey(vkey) ||
+        _keyStates.Any(s => s.Value.Holding && !ReferenceEquals(s.Key, except) && s.Key.VirtualKeyCode == vkey);
 
     /// <summary>Queues a key sequence's presses and releases at their times from now. Ignored
     /// while that sequence is still playing, and refused outright if any step names a key outside
@@ -522,9 +596,10 @@ public sealed class MappingEngine
                 }
                 else
                 {
-                    _keys.KeyUp(pending.VKey);
+                    // Only the last sequence holding the key lets go of it, and not while a hold mapping has it down.
                     if (_sequenceKeysDown.GetValueOrDefault(pending.VKey) <= 1) _sequenceKeysDown.Remove(pending.VKey);
                     else _sequenceKeysDown[pending.VKey]--;
+                    if (!KeyHeldElsewhere(pending.VKey)) _keys.KeyUp(pending.VKey);
                 }
             }
             if (queue.Count == 0) _sequences.Remove(keyBinding);

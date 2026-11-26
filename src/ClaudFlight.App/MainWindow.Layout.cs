@@ -79,7 +79,11 @@ public partial class MainWindow
                 var deviceLabel = DeviceName(marker.DeviceGuid);
                 var savedLabel = SavedControlName(marker.DeviceGuid, marker.Kind, marker.Index);
                 var mapping = DescribeMarkerMappings(marker);
-                LayoutItems.Add(new LayoutMarkerViewModel(marker, reading, savedLabel, deviceLabel, mapping) { IsEditing = _isLayoutEditing });
+                LayoutItems.Add(new LayoutMarkerViewModel(marker, reading, savedLabel, deviceLabel, mapping)
+                {
+                    IsEditing = _isLayoutEditing,
+                    IsZoneActive = marker.Part == InputPart.Zone ? ZoneCheck(marker.DeviceGuid, marker.Index) : null,
+                });
             }
 
             foreach (var text in page.Texts)
@@ -229,6 +233,20 @@ public partial class MainWindow
             if (keyBinding.Source.Kind != ControlKind.Axis && !keyBinding.HoldWhilePressed) text += keyBinding.TapOnRelease ? " (tap on/off)" : " (tap)";
         }
         return WithTriggerAndZone(text, keyBinding.Trigger, keyBinding.IsZone, keyBinding.ZoneFrom, keyBinding.ZoneTo);
+    }
+
+    /// <summary>Whether an axis is inside any of its zone mappings (either layer) right now. The
+    /// zones are read once; markers are rebuilt whenever mappings change.</summary>
+    private Func<bool> ZoneCheck(Guid deviceGuid, int axisIndex)
+    {
+        var zones = _currentProfile.Bindings
+            .Where(b => b.Part == InputPart.Zone && b.Source.DeviceGuid == deviceGuid && b.Source.Kind == ControlKind.Axis && b.Source.Index == axisIndex)
+            .Select(b => (b.ZoneFrom, b.ZoneTo))
+            .Concat(_currentProfile.KeyBindings
+                .Where(k => k.IsZone && k.Source.DeviceGuid == deviceGuid && k.Source.Kind == ControlKind.Axis && k.Source.Index == axisIndex)
+                .Select(k => (k.ZoneFrom, k.ZoneTo)))
+            .ToList();
+        return () => AxisTravel(deviceGuid, axisIndex) is { } position && zones.Any(z => InputParts.InZone(position, z.ZoneFrom, z.ZoneTo));
     }
 
     /// <summary>Where an axis is along its travel right now (0..1, calibrated), or null if it isn't connected.</summary>

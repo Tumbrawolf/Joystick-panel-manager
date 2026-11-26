@@ -202,7 +202,7 @@ public partial class MainWindow
         if (SelectedProfileName is not { } name || _profileStore.IsSameProfile(name, _currentProfile.Name)) return;
 
         var games = _settings.GameProfiles.Where(g => _profileStore.IsSameProfile(g.ProfileName, name)).ToList();
-        var message = $"Delete profile '{name}'? This can't be undone (Export it first if you might want it back).";
+        var message = $"Delete profile '{name}' and its backups? This can't be undone (Export it first if you might want it back).";
         if (games.Count > 0) message += $"\n\nIt's also removed from the games that use it: {string.Join(", ", games.Select(g => g.ProcessName))}.";
         if (MessageBox.Show(this, message, "Delete profile", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 

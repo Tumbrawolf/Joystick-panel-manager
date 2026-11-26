@@ -106,6 +106,9 @@ public sealed class LayoutMarkerViewModel : LayoutItemViewModel
 
     public LayoutMarker Marker { get; }
     public INamedControl? Reading { get; }
+
+    /// <summary>Zone markers only: whether the axis is inside any of its zone mappings right now.</summary>
+    public Func<bool>? IsZoneActive { get; init; }
     public string DeviceLabel { get; }
     public string MappingText { get; }
     public bool HasMapping => MappingText.Length > 0;
@@ -119,8 +122,8 @@ public sealed class LayoutMarkerViewModel : LayoutItemViewModel
     /// <summary>Show the live position bar: only for a whole axis (its halves light up instead).</summary>
     public bool IsAxis => Marker.Kind == ControlKind.Axis && Marker.Part == InputPart.Whole;
 
-    /// <summary>Button held down, hat pushed (toward this marker's direction, if it has one), or
-    /// axis pushed well into this marker's half.</summary>
+    /// <summary>Button held down, hat pushed (toward this marker's direction, if it has one), axis
+    /// pushed well into this marker's half, or inside one of its zones.</summary>
     public bool IsActive => Reading switch
     {
         ButtonReadingViewModel button => button.IsPressed,
@@ -131,6 +134,7 @@ public sealed class LayoutMarkerViewModel : LayoutItemViewModel
         {
             InputPart.Positive => axis.Normalized >= 0.75,
             InputPart.Negative => axis.Normalized <= 0.25,
+            InputPart.Zone => IsZoneActive?.Invoke() ?? false,
             _ => false,
         },
         _ => false,

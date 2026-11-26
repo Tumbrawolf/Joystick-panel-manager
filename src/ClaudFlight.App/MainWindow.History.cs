@@ -12,6 +12,10 @@ namespace ClaudFlight.App;
 public partial class MainWindow
 {
     private const int UndoLimit = 50;
+
+    /// <summary>Most text the undo steps may hold in all (about 40 MB) - profiles carry their
+    /// pictures, so a picture-heavy one keeps fewer steps.</summary>
+    private const long UndoCharBudget = 20_000_000;
     private static readonly TimeSpan BackupGap = TimeSpan.FromMinutes(10);
 
     private readonly List<string> _undo = [];
@@ -42,11 +46,17 @@ public partial class MainWindow
         }
         else if (_lastSavedJson is { } previous)
         {
-            _undo.Add(previous);
-            if (_undo.Count > UndoLimit) _undo.RemoveAt(0);
+            PushUndo(previous);
             _redo.Clear();
         }
         UpdateUndoButtons();
+    }
+
+    /// <summary>Adds an undo step, dropping the oldest beyond UndoLimit or UndoCharBudget (always keeping the newest).</summary>
+    private void PushUndo(string json)
+    {
+        _undo.Add(json);
+        while (_undo.Count > UndoLimit || (_undo.Count > 1 && _undo.Sum(s => (long)s.Length) > UndoCharBudget)) _undo.RemoveAt(0);
     }
 
     private void UpdateUndoButtons()
@@ -115,11 +125,19 @@ public partial class MainWindow
             var restored = _profileStore.RestoreBackup(name, backup);
             if (isActive)
             {
+                // Restoring is itself an undo step: Undo goes back to what it was just before.
+                var previous = _lastSavedJson;
+                if (!ReferenceEquals(_historyProfile, _currentProfile)) _undo.Clear();
+                if (previous is not null) PushUndo(previous);
+                _redo.Clear();
+
                 ApplyLoadedProfile(restored);
-                _lastSavedJson = null; // written below as it is now, without an undo step
+                _historyProfile = restored;
+                _lastSavedJson = null; // written below as it is now, without another undo step
                 _savingHistoryStep = true;
                 try { AutoSaveCurrentProfile(); }
                 finally { _savingHistoryStep = false; }
+                UpdateUndoButtons();
             }
             RefreshProfileList();
         }

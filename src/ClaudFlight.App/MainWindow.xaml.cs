@@ -313,6 +313,8 @@ public partial class MainWindow : Window
                 HighlightPressedKeys = screenSettings?.HighlightPressed ?? false,
                 ShowKeyState = screenSettings?.ShowState ?? false,
             };
+            // After the initial values, so only the user's changes (by mouse, keyboard or screen reader) count.
+            vm.PropertyChanged += KeyScreenOption_Changed;
 
             if (device is RawInputMouseDevice or RawInputCombinedDevice)
             {
@@ -470,10 +472,13 @@ public partial class MainWindow : Window
         UpdateButtonImageEntry(button, entry => entry.PressedJpeg = null);
     }
 
-    /// <summary>The "Show names" / "Light up while pressed" checkboxes on a StreamDock panel's card.</summary>
-    private void KeyScreenOption_Click(object sender, RoutedEventArgs e)
+    /// <summary>The key-screen switches on a StreamDock panel's card ("Show names", "Light up while
+    /// pressed", "Show latched keys and the shift layer"), via their two-way bindings.</summary>
+    private void KeyScreenOption_Changed(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (sender is not FrameworkElement { DataContext: DeviceMonitorViewModel device }) return;
+        if (sender is not DeviceMonitorViewModel device) return;
+        if (e.PropertyName is not (nameof(DeviceMonitorViewModel.ShowKeyNames) or nameof(DeviceMonitorViewModel.HighlightPressedKeys)
+            or nameof(DeviceMonitorViewModel.ShowKeyState))) return;
 
         var settings = _currentProfile.KeyScreenSettings.FirstOrDefault(k => k.DeviceGuid == device.DeviceGuid);
         if (settings is null)
@@ -542,7 +547,7 @@ public partial class MainWindow : Window
         var shiftHeld = _engine.ShiftHeld;
         var latched = _engine.LatchedSlots();
         _shownShiftHeld = shiftHeld;
-        _shownLatched = latched;
+        _shownLatchVersion = _engine.LatchVersion;
 
         var shown = new Dictionary<(Guid, int), (byte[]? Normal, byte[]? Pressed)>();
         foreach (var device in _streamDockManager.Devices.OfType<StreamDockDevice>())
@@ -612,7 +617,7 @@ public partial class MainWindow : Window
     }
 
     private bool _shownShiftHeld;
-    private IReadOnlySet<(Guid, ControlKind, int, InputPart)> _shownLatched = new HashSet<(Guid, ControlKind, int, InputPart)>();
+    private int _shownLatchVersion = -1;
 
     private byte[] LitPicture(byte[]? normal)
     {
@@ -640,7 +645,7 @@ public partial class MainWindow : Window
     private void RefreshKeyStateIfChanged()
     {
         if (!_currentProfile.KeyScreenSettings.Any(k => k.ShowState)) return;
-        if (_engine.ShiftHeld == _shownShiftHeld && _engine.LatchedSlots().SetEquals(_shownLatched)) return;
+        if (_engine.ShiftHeld == _shownShiftHeld && _engine.LatchVersion == _shownLatchVersion) return;
         ApplyButtonImages();
     }
 
