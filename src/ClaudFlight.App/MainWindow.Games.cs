@@ -18,23 +18,51 @@ public partial class MainWindow
     /// <summary>The game whose profile is active (or who had it active already), or null.</summary>
     private string? _activeGameProcess;
 
-    private void CheckGameProfiles()
+    /// <summary>True while the list of running programs is being read in the background.</summary>
+    private bool _checkingGames;
+
+    private async void CheckGameProfiles()
     {
+        if (_checkingGames) return;
+        if (_settings.GameProfiles.Count == 0 && _activeGameProcess is null) return;
+
+        // Listing every running program takes a moment on a busy PC; do it off the UI thread so
+        // the window and live readings don't stutter every few seconds.
+        _checkingGames = true;
+        HashSet<string> running;
+        try
+        {
+            running = await Task.Run(RunningProgramNames);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return;
+        }
+        finally
+        {
+            _checkingGames = false;
+        }
+
         var before = (_activeGameProcess, _profileBeforeGame);
-        CheckGameProfilesCore();
+        CheckGameProfilesCore(running);
         if ((_activeGameProcess, _profileBeforeGame) != before) UpdateGameStatus();
     }
 
-    private void CheckGameProfilesCore()
+    private static HashSet<string> RunningProgramNames()
     {
-        if (_settings.GameProfiles.Count == 0 && _activeGameProcess is null) return;
-
         var running = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var process in Process.GetProcesses())
         {
-            running.Add(process.ProcessName);
-            process.Dispose();
+            try { running.Add(process.ProcessName); }
+            catch (InvalidOperationException) { } // exited while being listed
+            finally { process.Dispose(); }
         }
+        return running;
+    }
+
+    private void CheckGameProfilesCore(HashSet<string> running)
+    {
+        if (_settings.GameProfiles.Count == 0 && _activeGameProcess is null) return;
 
         if (_activeGameProcess is not null)
         {
