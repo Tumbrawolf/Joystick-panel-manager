@@ -34,6 +34,14 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
   time it's switched on (pulse), give a short press on every flip on *and* off (for toggle
   switches when the game only has a single toggle binding), or latch (press once for on, again for
   off). The same choices apply to hat directions and axis ends.
+- **Tap, hold or double-tap** — each mapping on a button (or hat direction, axis end or zone) can
+  fire on a normal press, a short press (tap and let go), a long press (held half a second) or a
+  double tap, so one button can do several things.
+- **Axis zones** — right-click an axis and choose **Remap zones** to make stretches of its travel
+  act as buttons, e.g. 0-5% for idle cut-off and 95-100% for afterburner. Move the axis and click
+  **Start here** / **End here** to set a zone where it physically is.
+- **Key sequences** — a press can play a short macro, e.g. `G, wait 200, Ctrl+L, Enter` (keys
+  separated by commas, held together with `+`, pauses with `wait` and milliseconds).
 - **Shift layer** — pick any button (or hat direction, or axis end) as the shift control; while
   it's held, every control with a shifted mapping does that instead. Controls without a shifted
   mapping keep doing their normal thing, so you only set up the extras.
@@ -48,6 +56,9 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
   **Mappings** tab. The Mappings tab lists everything mapped in plain words, filterable by device,
   layer and type and sortable by any column. **Map all to vJoy...** on a device's card maps every
   control on that device in one click.
+- **vJoy Output** tab — shows what your mappings are sending right now: every vJoy axis, button
+  and hat a game would see, and the last keyboard keys pressed. It works without vJoy installed,
+  so you can check mappings before installing it.
 - **Keyboard keys** stay off every launch until you tick **Keyboard keys on** at the top of the
   window (or in the tray icon's menu) - see the safety note below.
 - **Profiles** — named setups that save automatically as you make changes; the last-used profile
@@ -55,11 +66,15 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
   delete, and Export/Import to a `.json` file anywhere (for backup or sharing). A single device's
   renames/calibration/mappings can also be exported/imported from its card in Live Monitor. The
   dropdown at the bottom of the window switches profile from any tab.
+- **Undo and backups** — **Undo**/**Redo** at the bottom of the window (or Ctrl+Z / Ctrl+Y) step
+  back through this session's changes. Each profile also keeps up to 30 automatic backups (one at
+  most every 10 minutes while it changes); **Backups...** on the Profiles tab puts one back.
 - **Per-game profiles** — on the Profiles tab, tell ClaudFlight which profile goes with which
   game; it switches to that profile while the game is running and back to your previous one when
   the game closes.
 - **Runs in the background** — closing or minimizing the window sends it to the system tray
-  instead of exiting, so mapping keeps running while you're in a game.
+  instead of exiting, so mapping keeps running while you're in a game. Tick **Start with Windows**
+  (top of the window or the tray menu) to have it start in the tray when you sign in.
 
 ## Requirements
 
@@ -140,6 +155,7 @@ modifiers) can ever be simulated, even if a profile file were edited by hand.
 ## Where things are stored
 
 - Profiles: `%AppData%\ClaudFlight\profiles\*.json`
+- Automatic profile backups: `%AppData%\ClaudFlight\profiles\Backups\<profile name>\`
 - Last-used profile / app settings: `%AppData%\ClaudFlight\settings.json`
 
 Profile files are plain JSON and safe to inspect, back up, or hand-edit if you know what you're
@@ -168,9 +184,11 @@ their settings even if moved to a different port.
   onto it); any common image format works and is fitted onto the key's 64x64 screen. Pictures are
   saved in the profile, travel with a device Export/Import, and are redrawn whenever ClaudFlight
   connects to the panel. **Set pressed image...** gives a key a second picture shown while it's
-  held. Each panel's card also has two switches: **Show names on keys without a picture** (the
-  key's name and what it's mapped to, updated as you rename or remap) and **Light up keys while
-  pressed** (a bright frame on keys that have no pressed picture of their own). If VSD Craft is running anyway, ClaudFlight stays quiet and just listens
+  held. Each panel's card also has three switches: **Show names on keys without a picture** (the
+  key's name and what it's mapped to, updated as you rename or remap), **Light up keys while
+  pressed** (a bright frame on keys that have no pressed picture of their own) and **Show latched
+  keys and the shift layer** (keys stay lit while a latching mapping on them is on, and named keys
+  show their shifted mappings while the shift control is held). If VSD Craft is running anyway, ClaudFlight stays quiet and just listens
   alongside it (VSD Craft's own pictures stay on the keys), and takes over again - redrawing
   ClaudFlight's pictures - when VSD Craft quits. Which key number sits at which physical position isn't documented,
   so press each key in Live Monitor to see its number and rename it. Other StreamDock models can

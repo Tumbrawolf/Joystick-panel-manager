@@ -29,6 +29,36 @@ public sealed class Binding
     /// <summary>Nudge only: fraction of the axis's full travel (0..1) to move per second while
     /// held (Mode Hold), or per press (any other mode).</summary>
     public double NudgeAmount { get; init; } = 0.5;
+
+    /// <summary>On/off sources only: which kind of press counts - see PressTrigger.</summary>
+    public PressTrigger Trigger { get; init; } = PressTrigger.Press;
+
+    /// <summary>Zone part only: the stretch of the axis's travel (0 = one end, 1 = the other, after
+    /// calibration) that counts as pressed - e.g. 0.9..1 for an afterburner detent.</summary>
+    public double ZoneFrom { get; init; }
+
+    /// <summary>Zone part only: see ZoneFrom.</summary>
+    public double ZoneTo { get; init; } = 1;
+}
+
+/// <summary>Which kind of press makes an on/off source (button, hat direction, axis half or zone)
+/// count as pressed for one mapping - so one button can do different things when tapped, held or
+/// double-tapped.</summary>
+public enum PressTrigger
+{
+    /// <summary>Straight away, for as long as it's held (the normal case).</summary>
+    Press,
+
+    /// <summary>A quick press: fires once it's let go, if it was held less than
+    /// MappingEngine.LongPressSeconds - so it can share a button with a LongPress mapping.</summary>
+    ShortPress,
+
+    /// <summary>Once it's been held for MappingEngine.LongPressSeconds, until it's let go.</summary>
+    LongPress,
+
+    /// <summary>A second press within MappingEngine.DoubleTapSeconds of the first, for as long as
+    /// that second press is held.</summary>
+    DoubleTap,
 }
 
 /// <summary>How an on/off source (button, hat direction, axis half) drives its output.</summary>
@@ -72,6 +102,10 @@ public enum InputPart
     Left,
     Positive,
     Negative,
+
+    /// <summary>A stretch of an axis's travel (see Binding.ZoneFrom/ZoneTo), acting as a button
+    /// while the axis is inside it. One axis can have many zones, each its own mapping.</summary>
+    Zone,
 }
 
 public static class InputParts
@@ -80,7 +114,7 @@ public static class InputParts
     public static IReadOnlyList<InputPart> For(ControlKind kind) => kind switch
     {
         ControlKind.Pov => [InputPart.Whole, InputPart.Up, InputPart.Right, InputPart.Down, InputPart.Left],
-        ControlKind.Axis => [InputPart.Whole, InputPart.Positive, InputPart.Negative],
+        ControlKind.Axis => [InputPart.Whole, InputPart.Positive, InputPart.Negative, InputPart.Zone],
         _ => [InputPart.Whole],
     };
 
@@ -93,10 +127,18 @@ public static class InputParts
         InputPart.Left => " ←",
         InputPart.Positive => " +",
         InputPart.Negative => " −",
+        InputPart.Zone => " zones",
         _ => "",
     };
 
     public static bool IsDirection(InputPart part) => part is >= InputPart.Up and <= InputPart.Left;
+
+    /// <summary>Where a calibrated axis value (-1..1) sits along its travel, 0..1.</summary>
+    public static double TravelPosition(double normalized) => (Math.Clamp(normalized, -1, 1) + 1) / 2;
+
+    /// <summary>True if a travel position (0..1) is inside a zone; the ends can be given either way round.</summary>
+    public static bool InZone(double position, double from, double to) =>
+        position >= Math.Min(from, to) && position <= Math.Max(from, to);
 
     /// <summary>0=N, 1=E, 2=S, 3=W, matching KeyBinding.PovDirection.</summary>
     public static int ToPovDirection(InputPart part) => part - InputPart.Up;
@@ -108,7 +150,7 @@ public static class InputParts
     public static InputPart Of(KeyBinding keyBinding) => keyBinding.Source.Kind switch
     {
         ControlKind.Pov => FromPovDirection(keyBinding.PovDirection),
-        ControlKind.Axis => keyBinding.AxisAboveThreshold ? InputPart.Positive : InputPart.Negative,
+        ControlKind.Axis => keyBinding.IsZone ? InputPart.Zone : keyBinding.AxisAboveThreshold ? InputPart.Positive : InputPart.Negative,
         _ => InputPart.Whole,
     };
 
@@ -174,6 +216,31 @@ public sealed class KeyBinding
 
     /// <summary>True = this key belongs to the shift layer (see Binding.Shifted).</summary>
     public bool Shifted { get; init; }
+
+    /// <summary>Which kind of press counts - see PressTrigger.</summary>
+    public PressTrigger Trigger { get; init; } = PressTrigger.Press;
+
+    /// <summary>Axis only: true = active while the axis is inside ZoneFrom..ZoneTo (see Binding.ZoneFrom)
+    /// rather than past AxisThreshold at one end.</summary>
+    public bool IsZone { get; init; }
+
+    public double ZoneFrom { get; init; }
+    public double ZoneTo { get; init; } = 1;
+
+    /// <summary>Not empty = a key sequence (macro) played once each time the control is pressed,
+    /// instead of the single VirtualKeyCode.</summary>
+    public List<KeyStep>? Sequence { get; init; }
+}
+
+/// <summary>One step of a key sequence: a key (or keys pressed together, e.g. Ctrl+G) tapped, or
+/// a pause when Keys is empty.</summary>
+public sealed class KeyStep
+{
+    /// <summary>Virtual-key codes pressed together, in order, then let go in reverse order.</summary>
+    public List<int> Keys { get; init; } = [];
+
+    /// <summary>Keys empty only: how long to pause, in milliseconds.</summary>
+    public int WaitMs { get; init; }
 }
 
 public sealed class Profile
@@ -247,6 +314,10 @@ public sealed class KeyScreenSettings
 
     /// <summary>Keys without a pressed picture of their own light up while held.</summary>
     public bool HighlightPressed { get; set; }
+
+    /// <summary>Keys stay lit while a latched mapping on them is on, and named keys show their
+    /// shifted mappings while the shift control is held.</summary>
+    public bool ShowState { get; set; }
 }
 
 /// <summary>The picture shown on one button's screen: a JPEG already sized for that device's

@@ -42,7 +42,10 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _engine = new MappingEngine(AllDevices, _vjoyManager);
+        // The recorders pass everything on unchanged and remember it for the vJoy Output tab.
+        _vjoyRecorder = new VJoyOutputRecorder(_vjoyManager);
+        _keyRecorder = new KeyOutputRecorder(new SendInputKeyOutput());
+        _engine = new MappingEngine(AllDevices, _vjoyRecorder, _keyRecorder);
 
         InitializeComponent();
         DataContext = this;
@@ -51,6 +54,14 @@ public partial class MainWindow : Window
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
         StateChanged += MainWindow_StateChanged;
+        KeyDown += MainWindow_KeyDown;
+
+        // Started by Windows at sign-in: come up minimized, then drop straight to the tray once loaded.
+        if (StartedInTray)
+        {
+            WindowState = WindowState.Minimized;
+            ShowActivated = false;
+        }
 
         // If Windows itself is shutting down or logging off, let the app actually exit (and run
         // its normal cleanup/autosave) instead of cancelling the close to hide in the tray - doing
@@ -84,6 +95,8 @@ public partial class MainWindow : Window
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
         InitializeTrayIcon();
+        SyncStartupUi();
+        if (StartedInTray) Hide();
 
         VJoyStatusText.Text = _vjoyManager.IsAvailable
             ? "vJoy: available"
@@ -165,6 +178,8 @@ public partial class MainWindow : Window
 
         var menu = new System.Windows.Forms.ContextMenuStrip();
         AddTrayKeyboardItem(menu);
+        AddTrayStartupItem(menu);
+        menu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
         menu.Items.Add("Show ClaudFlight", null, (_, _) => ShowFromTray());
         menu.Items.Add("Exit", null, (_, _) => ExitFromTray());
 
@@ -210,6 +225,7 @@ public partial class MainWindow : Window
         try
         {
             var isNew = !_profileStore.Exists(_currentProfile.Name);
+            BeforeProfileSaved(isNew);
             _profileStore.SaveSerialized(_currentProfile.Name, json);
             _lastSavedJson = json;
             if (_currentProfile.KeyScreenSettings.Any(k => k.ShowNames)) ApplyButtonImages(); // names/mappings may have changed
@@ -242,6 +258,15 @@ public partial class MainWindow : Window
         foreach (var device in Devices)
         {
             if (snapshots.TryGetValue(device.DeviceGuid, out var snapshot)) device.ApplySnapshot(snapshot);
+        }
+
+        RefreshKeyStateIfChanged();
+
+        if (IsOutputTabShown)
+        {
+            // Rebuilt when another profile is switched in (its own Bindings list) or remaps change.
+            if (!ReferenceEquals(_outputBuiltFor, _currentProfile.Bindings)) RebuildOutputView();
+            else UpdateOutputView();
         }
     }
 
@@ -286,6 +311,7 @@ public partial class MainWindow : Window
                 HasKeyScreens = device is StreamDockDevice { ButtonCount: > 0 } panel && Enumerable.Range(0, panel.ButtonCount).Any(panel.HasKeyScreen),
                 ShowKeyNames = screenSettings?.ShowNames ?? false,
                 HighlightPressedKeys = screenSettings?.HighlightPressed ?? false,
+                ShowKeyState = screenSettings?.ShowState ?? false,
             };
 
             if (device is RawInputMouseDevice or RawInputCombinedDevice)
@@ -457,7 +483,8 @@ public partial class MainWindow : Window
         }
         settings.ShowNames = device.ShowKeyNames;
         settings.HighlightPressed = device.HighlightPressedKeys;
-        if (!settings.ShowNames && !settings.HighlightPressed) _currentProfile.KeyScreenSettings.Remove(settings);
+        settings.ShowState = device.ShowKeyState;
+        if (!settings.ShowNames && !settings.HighlightPressed && !settings.ShowState) _currentProfile.KeyScreenSettings.Remove(settings);
         ApplyButtonImages();
     }
 
@@ -511,10 +538,17 @@ public partial class MainWindow : Window
         if (_namePictures.Count > 500) _namePictures.Clear();
         if (_highlightPictures.Count > 500) _highlightPictures.Clear();
 
+        // What the keys showing state reflect - remembered so Timer_Tick redraws only when it changes.
+        var shiftHeld = _engine.ShiftHeld;
+        var latched = _engine.LatchedSlots();
+        _shownShiftHeld = shiftHeld;
+        _shownLatched = latched;
+
         var shown = new Dictionary<(Guid, int), (byte[]? Normal, byte[]? Pressed)>();
         foreach (var device in _streamDockManager.Devices.OfType<StreamDockDevice>())
         {
             var settings = _currentProfile.KeyScreenSettings.FirstOrDefault(k => k.DeviceGuid == device.InstanceGuid);
+            var showState = settings?.ShowState == true;
             var deviceVm = Devices.FirstOrDefault(d => d.DeviceGuid == device.InstanceGuid);
             var images = new Dictionary<int, byte[]>();
             var pressedImages = new Dictionary<int, byte[]>();
@@ -528,7 +562,9 @@ public partial class MainWindow : Window
                 {
                     var name = deviceVm?.FindControl(ControlKind.Button, index)?.Label
                                ?? GetSavedLabel(device.InstanceGuid, ControlKind.Button, index, device.ButtonDeviceNames.GetValueOrDefault(index, $"{index + 1}"));
-                    var mapping = DescribeMappings(device.InstanceGuid, ControlKind.Button, index, InputPart.Whole);
+                    var mapping = showState && shiftHeld
+                        ? DescribeShiftLayer(device.InstanceGuid, ControlKind.Button, index, InputPart.Whole)
+                        : DescribeMappings(device.InstanceGuid, ControlKind.Button, index, InputPart.Whole);
                     var key = name + "\n" + mapping;
                     if (!_namePictures.TryGetValue(key, out normal))
                     {
@@ -546,6 +582,12 @@ public partial class MainWindow : Window
                         pressed = KeyImages.Highlight(normal, StreamDockDevice.KeyImageSize);
                         _highlightPictures[normal] = pressed;
                     }
+                }
+
+                // A latched key stays lit (its picture with the pressed frame) until it's unlatched.
+                if (showState && latched.Contains((device.InstanceGuid, ControlKind.Button, index, InputPart.Whole)))
+                {
+                    normal = LitPicture(normal);
                 }
 
                 if (normal is not null) images[index] = normal;
@@ -567,6 +609,39 @@ public partial class MainWindow : Window
                 button.PressedImage = pressed is null ? null : KeyImages.Decode(pressed);
             }
         }
+    }
+
+    private bool _shownShiftHeld;
+    private IReadOnlySet<(Guid, ControlKind, int, InputPart)> _shownLatched = new HashSet<(Guid, ControlKind, int, InputPart)>();
+
+    private byte[] LitPicture(byte[]? normal)
+    {
+        if (normal is null) return _blankHighlight ??= KeyImages.Highlight(null, StreamDockDevice.KeyImageSize);
+        if (!_highlightPictures.TryGetValue(normal, out var lit))
+        {
+            lit = KeyImages.Highlight(normal, StreamDockDevice.KeyImageSize);
+            _highlightPictures[normal] = lit;
+        }
+        return lit;
+    }
+
+    /// <summary>What a control does while shift is held: its shifted mappings (marked ⇧), or its
+    /// normal ones if it has none - those keep working in the shift layer.</summary>
+    private string DescribeShiftLayer(Guid deviceGuid, ControlKind kind, int index, InputPart part)
+    {
+        var remaps = GetRemaps(deviceGuid, kind, index, part);
+        var shifted = remaps.Where(r => r.Shifted).Select(r => r.Description).ToList();
+        if (shifted.Count > 0) return "⇧ " + string.Join(", ", shifted);
+        return DescribeMappings(deviceGuid, kind, index, part);
+    }
+
+    /// <summary>Redraws StreamDock keys when the shift control or a latch changes, for panels
+    /// set to show that.</summary>
+    private void RefreshKeyStateIfChanged()
+    {
+        if (!_currentProfile.KeyScreenSettings.Any(k => k.ShowState)) return;
+        if (_engine.ShiftHeld == _shownShiftHeld && _engine.LatchedSlots().SetEquals(_shownLatched)) return;
+        ApplyButtonImages();
     }
 
     private void RestoreControl_Click(object sender, RoutedEventArgs e)
@@ -779,22 +854,15 @@ public partial class MainWindow : Window
             }
         }
 
+        // Full copies, so every setting (part, mode, layer, trigger, zone, sequence...) comes along.
         foreach (var binding in imported.Bindings.Where(b => b.Source.DeviceGuid == sourceGuid))
         {
-            _currentProfile.Bindings.Add(new Binding { Source = binding.Source with { DeviceGuid = targetGuid }, Target = binding.Target });
+            _currentProfile.Bindings.Add(ModelCopy.WithSourceDevice(binding, targetGuid));
         }
 
         foreach (var keyBinding in imported.KeyBindings.Where(k => k.Source.DeviceGuid == sourceGuid))
         {
-            _currentProfile.KeyBindings.Add(new ClaudFlight.Core.Models.KeyBinding
-            {
-                Source = keyBinding.Source with { DeviceGuid = targetGuid },
-                VirtualKeyCode = keyBinding.VirtualKeyCode,
-                HoldWhilePressed = keyBinding.HoldWhilePressed,
-                PovDirection = keyBinding.PovDirection,
-                AxisThreshold = keyBinding.AxisThreshold,
-                AxisAboveThreshold = keyBinding.AxisAboveThreshold,
-            });
+            _currentProfile.KeyBindings.Add(ModelCopy.WithSourceDevice(keyBinding, targetGuid));
         }
 
         foreach (var image in imported.ButtonImages.Where(i => i.DeviceGuid == sourceGuid))
@@ -965,6 +1033,7 @@ public partial class MainWindow : Window
         RefreshDevices();
         RebuildLayoutPages();
         RefreshProfileList();
+        UpdateUndoButtons();
     }
 
     /// <summary>Makes Raw Input keypads number their buttons the way the current profile does

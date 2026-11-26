@@ -14,12 +14,25 @@ namespace ClaudFlight.Core.Mapping;
 /// - switch modes (hold, pulse on press, pulse on every flip, latch);
 /// - the shift layer: while the profile's shift control is held, any input that has shift-layer
 ///   mappings uses those instead of its normal ones (inputs without any keep their normal ones);
-/// - axis nudges: on/off inputs moving a vJoy axis up/down/to center (e.g. trim buttons).</summary>
+/// - axis nudges: on/off inputs moving a vJoy axis up/down/to center (e.g. trim buttons);
+/// - press triggers: a mapping can react only to a short press, a long press or a double tap;
+/// - axis zones: a stretch of an axis's travel acting as a button;
+/// - key sequences (macros) played step by step over the following ticks.</summary>
 public sealed class MappingEngine
 {
     /// <summary>How long a pulse (SwitchMode.PulseOnPress/PulseOnBoth, key taps aside) holds its
     /// output on - long enough for a sim polling at a modest rate to see it.</summary>
     public const double PulseSeconds = 0.1;
+
+    /// <summary>How long a press has to last to count as a long press (and how short a short one).</summary>
+    public const double LongPressSeconds = 0.5;
+
+    /// <summary>The most time between two presses for them to count as a double tap.</summary>
+    public const double DoubleTapSeconds = 0.35;
+
+    /// <summary>Key sequences: how long each key is held, and the gap before the next step.</summary>
+    public const double SequenceKeySeconds = 0.05;
+    public const double SequenceGapSeconds = 0.05;
 
     private const double ShiftAxisThreshold = 0.5;
     private const double MaxNudgeStepSeconds = 0.2;
@@ -45,8 +58,22 @@ public sealed class MappingEngine
         public bool Holding;
     }
 
+    private sealed class TriggerState
+    {
+        public bool LastRaw;
+        public double PressedAt = double.NaN;
+        public double LastTapAt = double.NegativeInfinity;
+        public bool SecondTap;
+        public double PulseUntil = double.MinValue;
+    }
+
+    private sealed record PendingKey(double At, int VKey, bool Down);
+
     private Dictionary<Binding, SwitchState> _switchStates = [];
     private readonly Dictionary<KeyBinding, KeyState> _keyStates = [];
+    private Dictionary<object, TriggerState> _triggerStates = [];
+    private readonly Dictionary<KeyBinding, Queue<PendingKey>> _sequences = [];
+    private readonly Dictionary<int, int> _sequenceKeysDown = [];
     private readonly Dictionary<(uint, VJoyAxis), double> _nudgedAxes = [];
     private double _lastTick = double.NaN;
 
@@ -96,7 +123,16 @@ public sealed class MappingEngine
         // Keep switch state (latches, pulses in flight) for bindings that survived the reload.
         var kept = new HashSet<Binding>(profile.Bindings);
         _switchStates = _switchStates.Where(s => kept.Contains(s.Key)).ToDictionary(s => s.Key, s => s.Value);
+        var keptOutputs = new HashSet<object>([.. profile.Bindings, .. profile.KeyBindings]);
+        _triggerStates = _triggerStates.Where(s => keptOutputs.Contains(s.Key)).ToDictionary(s => s.Key, s => s.Value);
     }
+
+    /// <summary>Whether the shift control was held at the last tick.</summary>
+    public bool ShiftHeld { get; private set; }
+
+    /// <summary>Inputs (or parts of them) with a latching mapping that's currently latched on.</summary>
+    public IReadOnlySet<(Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part)> LatchedSlots() =>
+        _switchStates.Where(s => s.Key.Mode == SwitchMode.Latch && s.Value.Latched).Select(s => SlotOf(s.Key)).ToHashSet();
 
     public Profile CurrentProfile => _profile;
 
@@ -113,6 +149,15 @@ public sealed class MappingEngine
 
     public AxisCalibration GetCalibration(Guid deviceGuid, AxisType axis) =>
         _calibrations.GetValueOrDefault((deviceGuid, axis), DefaultCalibration);
+
+    private IReadOnlyDictionary<Guid, JoystickSnapshot> _lastSnapshots = new Dictionary<Guid, JoystickSnapshot>();
+
+    /// <summary>Where an axis was along its travel at the last tick (0..1, after calibration - the
+    /// scale axis zones use), or null if the device or axis wasn't there.</summary>
+    public double? AxisTravel(Guid deviceGuid, AxisType axis) =>
+        _lastSnapshots.TryGetValue(deviceGuid, out var snap) && snap.Axes.TryGetValue(axis, out var raw)
+            ? InputParts.TravelPosition(GetCalibration(deviceGuid, axis).Normalize(raw))
+            : null;
 
     /// <summary>Polls every physical device once, applies the active profile, and pushes the
     /// result to vJoy and/or simulated key presses. Returns the raw per-device snapshots so the
@@ -139,9 +184,11 @@ public sealed class MappingEngine
             }
             snapshots[device.InstanceGuid] = snapshot;
         }
+        _lastSnapshots = snapshots;
 
         var shiftHeld = _profile.ShiftControl is { } shift && snapshots.TryGetValue(shift.DeviceGuid, out var shiftSnap) &&
                         IsOn(shiftSnap, shift.DeviceGuid, shift.Kind, shift.Index, shift.Part, ShiftAxisThreshold);
+        ShiftHeld = shiftHeld;
 
         var buttonAgg = new Dictionary<(uint DeviceId, int Button), bool>();
         var povAgg = new Dictionary<(uint DeviceId, int Pov), int>();
@@ -171,7 +218,9 @@ public sealed class MappingEngine
                     break;
 
                 default:
-                    var raw = IsOn(snap, binding.Source.DeviceGuid, binding.Source.Kind, binding.Source.Index, binding.Part, binding.AxisThreshold);
+                    var raw = IsOn(snap, binding.Source.DeviceGuid, binding.Source.Kind, binding.Source.Index, binding.Part,
+                        binding.AxisThreshold, binding.ZoneFrom, binding.ZoneTo);
+                    raw = ApplyTrigger(binding, binding.Trigger, raw, now);
                     var pressed = ApplySwitchMode(binding, raw, inLayer, now);
                     var key = (binding.Target.VJoyDeviceId, binding.Target.Index);
                     buttonAgg[key] = buttonAgg.TryGetValue(key, out var existing) ? existing || pressed : pressed;
@@ -192,9 +241,10 @@ public sealed class MappingEngine
 
         if (KeyboardInjectionEnabled)
         {
-            ProcessKeyBindings(snapshots, shiftHeld);
+            ProcessKeyBindings(snapshots, shiftHeld, now);
+            PlaySequences(now);
         }
-        else if (_keyStates.Values.Any(s => s.Holding))
+        else if (_keyStates.Values.Any(s => s.Holding) || _sequences.Count > 0)
         {
             // Safety net: if injection gets toggled off mid-hold, don't leave a key stuck down.
             ReleaseAllHeldKeys();
@@ -213,7 +263,8 @@ public sealed class MappingEngine
 
     /// <summary>Whether an input counts as "on": a button held, a hat pushed (toward a given
     /// direction, or at all for the whole hat), or an axis pushed past threshold in one direction.</summary>
-    private bool IsOn(JoystickSnapshot snap, Guid deviceGuid, ControlKind kind, int index, InputPart part, double axisThreshold)
+    private bool IsOn(JoystickSnapshot snap, Guid deviceGuid, ControlKind kind, int index, InputPart part, double axisThreshold,
+        double zoneFrom = 0, double zoneTo = 1)
     {
         switch (kind)
         {
@@ -226,14 +277,62 @@ public sealed class MappingEngine
                 return part == InputPart.Whole ? pov >= 0 : InputParts.IsPovDirectionActive(pov, part);
 
             case ControlKind.Axis:
-                if (part is not (InputPart.Positive or InputPart.Negative)) return false;
+                if (part is not (InputPart.Positive or InputPart.Negative or InputPart.Zone)) return false;
                 var axisType = (AxisType)index;
                 if (!snap.Axes.TryGetValue(axisType, out var raw)) return false;
                 var normalized = _calibrations.GetValueOrDefault((deviceGuid, axisType), DefaultCalibration).Normalize(raw);
-                return part == InputPart.Positive ? normalized >= axisThreshold : normalized <= -axisThreshold;
+                return part switch
+                {
+                    InputPart.Zone => InputParts.InZone(InputParts.TravelPosition(normalized), zoneFrom, zoneTo),
+                    InputPart.Positive => normalized >= axisThreshold,
+                    _ => normalized <= -axisThreshold,
+                };
 
             default:
                 return false;
+        }
+    }
+
+    /// <summary>Turns an on/off input into "pressed" as one mapping's trigger sees it: straight
+    /// through, or only a short press (a pulse once it's let go), a long press (once held long
+    /// enough), or a double tap (the second press). A press already held when the mapping is first
+    /// seen never counts.</summary>
+    private bool ApplyTrigger(object output, PressTrigger trigger, bool raw, double now)
+    {
+        if (trigger == PressTrigger.Press) return raw;
+
+        if (!_triggerStates.TryGetValue(output, out var state))
+        {
+            state = new TriggerState { LastRaw = raw };
+            _triggerStates[output] = state;
+        }
+        var rising = raw && !state.LastRaw;
+        var falling = !raw && state.LastRaw;
+        state.LastRaw = raw;
+        if (rising) state.PressedAt = now;
+
+        switch (trigger)
+        {
+            case PressTrigger.LongPress:
+                return raw && !double.IsNaN(state.PressedAt) && now - state.PressedAt >= LongPressSeconds;
+
+            case PressTrigger.ShortPress:
+                if (falling && !double.IsNaN(state.PressedAt) && now - state.PressedAt < LongPressSeconds) state.PulseUntil = now + PulseSeconds;
+                if (falling) state.PressedAt = double.NaN;
+                return now < state.PulseUntil;
+
+            case PressTrigger.DoubleTap:
+                if (rising)
+                {
+                    state.SecondTap = now - state.LastTapAt <= DoubleTapSeconds;
+                    // A second tap ends the pair, so a third quick tap starts a new one.
+                    state.LastTapAt = state.SecondTap ? double.NegativeInfinity : now;
+                }
+                if (!raw) state.SecondTap = false;
+                return raw && state.SecondTap;
+
+            default:
+                return raw;
         }
     }
 
@@ -272,7 +371,9 @@ public sealed class MappingEngine
 
     private void ApplyNudge(Binding binding, JoystickSnapshot snap, bool inLayer, (uint, VJoyAxis) axisKey, double now, double elapsed)
     {
-        var raw = IsOn(snap, binding.Source.DeviceGuid, binding.Source.Kind, binding.Source.Index, binding.Part, binding.AxisThreshold);
+        var raw = IsOn(snap, binding.Source.DeviceGuid, binding.Source.Kind, binding.Source.Index, binding.Part,
+            binding.AxisThreshold, binding.ZoneFrom, binding.ZoneTo);
+        raw = ApplyTrigger(binding, binding.Trigger, raw, now);
 
         if (!_switchStates.TryGetValue(binding, out var state))
         {
@@ -325,7 +426,7 @@ public sealed class MappingEngine
         else agg.TryAdd(key, -1);
     }
 
-    private void ProcessKeyBindings(IReadOnlyDictionary<Guid, JoystickSnapshot> snapshots, bool shiftHeld)
+    private void ProcessKeyBindings(IReadOnlyDictionary<Guid, JoystickSnapshot> snapshots, bool shiftHeld, double now)
     {
         foreach (var keyBinding in _profile.KeyBindings)
         {
@@ -334,26 +435,35 @@ public sealed class MappingEngine
             // profile.json could set it to anything - re-checking here (the one place that
             // actually calls SendInput) means a malicious profile file can never make this
             // simulate a key outside the app's own approved list, however it was loaded.
-            if (!KeyCatalog.Keys.Any(k => k.VKey == keyBinding.VirtualKeyCode)) continue;
+            // (Key sequences are checked the same way, step by step, in StartSequence.)
+            var isSequence = keyBinding.Sequence is { Count: > 0 };
+            if (!isSequence && !IsCatalogKey(keyBinding.VirtualKeyCode)) continue;
 
             if (!snapshots.TryGetValue(keyBinding.Source.DeviceGuid, out var snap)) continue;
 
             var part = InputParts.Of(keyBinding);
-            var raw = IsOn(snap, keyBinding.Source.DeviceGuid, keyBinding.Source.Kind, keyBinding.Source.Index, part, keyBinding.AxisThreshold);
+            var raw = IsOn(snap, keyBinding.Source.DeviceGuid, keyBinding.Source.Kind, keyBinding.Source.Index, part,
+                keyBinding.AxisThreshold, keyBinding.ZoneFrom, keyBinding.ZoneTo);
+            raw = ApplyTrigger(keyBinding, keyBinding.Trigger, raw, now);
             var inLayer = keyBinding.Shifted == (shiftHeld && _shiftedSlots.Contains(SlotOf(keyBinding)));
+            var holds = !isSequence && (keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed);
 
             if (!_keyStates.TryGetValue(keyBinding, out var state))
             {
                 state = new KeyState { LastRaw = raw };
                 _keyStates[keyBinding] = state;
-                if (!(keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed)) continue;
+                if (!holds) continue; // a tap or sequence never fires for a press already held at first sight
             }
 
             var rising = raw && !state.LastRaw;
             var falling = !raw && state.LastRaw;
             state.LastRaw = raw;
 
-            if (keyBinding.Source.Kind == ControlKind.Axis || keyBinding.HoldWhilePressed)
+            if (isSequence)
+            {
+                if (rising && inLayer) StartSequence(keyBinding, now);
+            }
+            else if (holds)
             {
                 var shouldHold = raw && inLayer;
                 if (shouldHold && !state.Holding) _keys.KeyDown(keyBinding.VirtualKeyCode);
@@ -369,8 +479,61 @@ public sealed class MappingEngine
         }
     }
 
-    /// <summary>Releases every key currently held down by a KeyBinding (e.g. when injection is
-    /// toggled off, the profile changes, or the app is closing) so nothing gets left stuck.</summary>
+    private static bool IsCatalogKey(int virtualKeyCode) => KeyCatalog.Keys.Any(k => k.VKey == virtualKeyCode);
+
+    /// <summary>Queues a key sequence's presses and releases at their times from now. Ignored
+    /// while that sequence is still playing, and refused outright if any step names a key outside
+    /// the catalog (see ProcessKeyBindings).</summary>
+    private void StartSequence(KeyBinding keyBinding, double now)
+    {
+        if (_sequences.ContainsKey(keyBinding) || keyBinding.Sequence is not { Count: > 0 } steps) return;
+        if (steps.Any(s => s.Keys.Any(k => !IsCatalogKey(k)))) return;
+
+        var queue = new Queue<PendingKey>();
+        var at = now;
+        foreach (var step in steps)
+        {
+            if (step.Keys.Count == 0)
+            {
+                at += Math.Clamp(step.WaitMs, 0, 60_000) / 1000.0;
+                continue;
+            }
+            foreach (var key in step.Keys) queue.Enqueue(new PendingKey(at, key, Down: true));
+            at += SequenceKeySeconds;
+            foreach (var key in Enumerable.Reverse(step.Keys)) queue.Enqueue(new PendingKey(at, key, Down: false));
+            at += SequenceGapSeconds;
+        }
+        if (queue.Count > 0) _sequences[keyBinding] = queue;
+        PlaySequences(now);
+    }
+
+    /// <summary>Sends every queued sequence key press/release that's due.</summary>
+    private void PlaySequences(double now)
+    {
+        foreach (var (keyBinding, queue) in _sequences.ToList())
+        {
+            while (queue.Count > 0 && queue.Peek().At <= now)
+            {
+                var pending = queue.Dequeue();
+                if (pending.Down)
+                {
+                    _keys.KeyDown(pending.VKey);
+                    _sequenceKeysDown[pending.VKey] = _sequenceKeysDown.GetValueOrDefault(pending.VKey) + 1;
+                }
+                else
+                {
+                    _keys.KeyUp(pending.VKey);
+                    if (_sequenceKeysDown.GetValueOrDefault(pending.VKey) <= 1) _sequenceKeysDown.Remove(pending.VKey);
+                    else _sequenceKeysDown[pending.VKey]--;
+                }
+            }
+            if (queue.Count == 0) _sequences.Remove(keyBinding);
+        }
+    }
+
+    /// <summary>Releases every key currently held down by a KeyBinding or a playing sequence (e.g.
+    /// when injection is toggled off, the profile changes, or the app is closing) and stops the
+    /// sequences, so nothing gets left stuck.</summary>
     private void ReleaseAllHeldKeys()
     {
         foreach (var (keyBinding, state) in _keyStates)
@@ -378,6 +541,10 @@ public sealed class MappingEngine
             if (state.Holding) _keys.KeyUp(keyBinding.VirtualKeyCode);
         }
         _keyStates.Clear();
+
+        foreach (var key in _sequenceKeysDown.Keys) _keys.KeyUp(key);
+        _sequenceKeysDown.Clear();
+        _sequences.Clear();
     }
 
     /// <summary>DirectInput reports POV angle in hundredths of a degree (0=N, 9000=E, ...), -1 when centered.

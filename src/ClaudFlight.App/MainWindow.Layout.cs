@@ -159,7 +159,17 @@ public partial class MainWindow
 
     /// <summary>Short description of a vJoy mapping, e.g. "vJoy 1 B5 (latch)" or "vJoy 1 Slider0 ▲ 50%/s".
     /// Button/hat numbers use the same 1-based numbering Live Monitor shows.</summary>
-    internal static string DescribeBinding(Binding binding)
+    internal static string DescribeBinding(Binding binding) =>
+        WithTriggerAndZone(DescribeBindingOutput(binding), binding.Trigger, binding.Part == InputPart.Zone, binding.ZoneFrom, binding.ZoneTo);
+
+    /// <summary>"90-100%: " in front for a zone, ", long press" after for a special trigger.</summary>
+    private static string WithTriggerAndZone(string text, PressTrigger trigger, bool isZone, double zoneFrom, double zoneTo)
+    {
+        if (TriggerName(trigger) is { Length: > 0 } name) text += $", {name}";
+        return isZone ? $"{Math.Min(zoneFrom, zoneTo) * 100:0}-{Math.Max(zoneFrom, zoneTo) * 100:0}%: {text}" : text;
+    }
+
+    private static string DescribeBindingOutput(Binding binding)
     {
         var target = binding.Target;
         if (binding.Nudge != AxisNudge.None)
@@ -192,13 +202,37 @@ public partial class MainWindow
         return text;
     }
 
+    /// <summary>"" for a normal press, else "long press" etc.</summary>
+    internal static string TriggerName(PressTrigger trigger) => trigger switch
+    {
+        PressTrigger.ShortPress => "short press",
+        PressTrigger.LongPress => "long press",
+        PressTrigger.DoubleTap => "double tap",
+        _ => "",
+    };
+
+    /// <summary>"zone 90-100%".</summary>
+    internal static string ZoneText(double from, double to) =>
+        $"zone {Math.Min(from, to) * 100:0}-{Math.Max(from, to) * 100:0}%";
+
     internal static string DescribeKeyBinding(ClaudFlight.Core.Models.KeyBinding keyBinding)
     {
-        var name = KeyCatalog.Keys.FirstOrDefault(k => k.VKey == keyBinding.VirtualKeyCode)?.Name ?? $"0x{keyBinding.VirtualKeyCode:X2}";
-        var text = $"Key {name}";
-        if (keyBinding.Source.Kind != ControlKind.Axis && !keyBinding.HoldWhilePressed) text += keyBinding.TapOnRelease ? " (tap on/off)" : " (tap)";
-        return text;
+        string text;
+        if (keyBinding.Sequence is { Count: > 0 } sequence)
+        {
+            text = $"Keys {KeySequenceText.Format(sequence)}";
+        }
+        else
+        {
+            var name = KeyCatalog.Keys.FirstOrDefault(k => k.VKey == keyBinding.VirtualKeyCode)?.Name ?? $"0x{keyBinding.VirtualKeyCode:X2}";
+            text = $"Key {name}";
+            if (keyBinding.Source.Kind != ControlKind.Axis && !keyBinding.HoldWhilePressed) text += keyBinding.TapOnRelease ? " (tap on/off)" : " (tap)";
+        }
+        return WithTriggerAndZone(text, keyBinding.Trigger, keyBinding.IsZone, keyBinding.ZoneFrom, keyBinding.ZoneTo);
     }
+
+    /// <summary>Where an axis is along its travel right now (0..1, calibrated), or null if it isn't connected.</summary>
+    internal double? AxisTravel(Guid deviceGuid, int axisIndex) => _engine.AxisTravel(deviceGuid, (AxisType)axisIndex);
 
     internal bool IsVJoyTargetUsed(uint vjoyDeviceId, ControlKind kind, int index) =>
         _currentProfile.Bindings.Any(b => b.Target.VJoyDeviceId == vjoyDeviceId && b.Target.Kind == kind && b.Target.Index == index);
@@ -284,6 +318,7 @@ public partial class MainWindow
         _engine.LoadProfile(_currentProfile);
         RebuildLayoutMarkers();
         RebuildMappingList();
+        _outputBuiltFor = null; // the vJoy Output tab rebuilds next time it's shown
     }
 
     private void OpenRemapEditor(LayoutMarkerViewModel marker)
@@ -339,6 +374,7 @@ public partial class MainWindow
         if (!ReferenceEquals(e.OriginalSource, MainTabs)) return;
         if (ReferenceEquals(MainTabs.SelectedItem, LayoutTab)) RebuildLayoutMarkers();
         else if (ReferenceEquals(MainTabs.SelectedItem, MappingsTab)) RebuildMappingList();
+        else if (ReferenceEquals(MainTabs.SelectedItem, OutputTab)) RebuildOutputView();
         else if (ReferenceEquals(MainTabs.SelectedItem, ProfilesTab))
         {
             RefreshProfileList();

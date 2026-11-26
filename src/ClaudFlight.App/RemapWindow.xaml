@@ -43,6 +43,29 @@
                     <TextBlock Text="Send:" Width="110" VerticalAlignment="Center" />
                     <ComboBox x:Name="OutputTypeCombo" DisplayMemberPath="Display" SelectionChanged="OutputTypeCombo_SelectionChanged" />
                 </DockPanel>
+                <DockPanel x:Name="TriggerRow" Margin="0,2">
+                    <TextBlock Text="When:" Width="110" VerticalAlignment="Center" />
+                    <ComboBox x:Name="TriggerCombo" DisplayMemberPath="Display"
+                              ToolTip="Which kind of press sets this off - so one button can do different things when tapped, held or double-tapped. A short press waits until you let go, so it can share a button with a long press." />
+                </DockPanel>
+                <StackPanel x:Name="ZoneRow" Margin="0,2">
+                    <DockPanel>
+                        <TextBlock Text="Zone:" Width="110" VerticalAlignment="Center" />
+                        <TextBox x:Name="ZoneFromBox" Text="90" Width="44" AutomationProperties.Name="Zone from percent"
+                                 ToolTip="Where the zone starts, as a percentage of the axis's travel (0 = one end, 100 = the other)." />
+                        <TextBlock Text="% to" VerticalAlignment="Center" Margin="4,0" />
+                        <TextBox x:Name="ZoneToBox" Text="100" Width="44" AutomationProperties.Name="Zone to percent"
+                                 ToolTip="Where the zone ends, as a percentage of the axis's travel." />
+                        <TextBlock Text="%" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    </DockPanel>
+                    <StackPanel Orientation="Horizontal" Margin="110,3,0,0">
+                        <TextBlock x:Name="ZoneLiveText" VerticalAlignment="Center" Width="130" FontSize="11" Foreground="#444444" />
+                        <Button Content="Start here" Click="ZoneFromHere_Click" Padding="6,0" FontSize="11" Margin="0,0,4,0"
+                                ToolTip="Move the axis to where the zone should start, then click this." />
+                        <Button Content="End here" Click="ZoneToHere_Click" Padding="6,0" FontSize="11"
+                                ToolTip="Move the axis to where the zone should end, then click this." />
+                    </StackPanel>
+                </StackPanel>
                 <DockPanel x:Name="NudgeRow" Margin="0,2">
                     <TextBlock Text="Move it:" Width="110" VerticalAlignment="Center" />
                     <ComboBox x:Name="NudgeCombo" DisplayMemberPath="Display" SelectionChanged="NudgeCombo_SelectionChanged" />
@@ -57,8 +80,19 @@
                     <ComboBox x:Name="TargetCombo" DisplayMemberPath="Display" MaxDropDownHeight="300" />
                 </DockPanel>
                 <TextBlock x:Name="VJoyLimitText" TextWrapping="Wrap" FontSize="11" Foreground="#885500" Margin="110,0,0,2" />
+                <StackPanel x:Name="SequenceRow" Margin="0,2">
+                    <DockPanel>
+                        <TextBlock Text="Keys:" Width="110" VerticalAlignment="Center" />
+                        <TextBox x:Name="SequenceBox" AutomationProperties.Name="Key sequence"
+                                 ToolTip="Keys pressed one after another, separated by commas. Join keys pressed together with + and pause with wait and a number of milliseconds." />
+                    </DockPanel>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#444444" Margin="110,2,0,0"
+                               Text="E.g. &quot;G, wait 200, Ctrl+L, Enter&quot;. Played once each time it's pressed. Pick a key below and click Insert to add it." />
+                </StackPanel>
                 <DockPanel x:Name="KeyRow" Margin="0,2">
                     <TextBlock Text="Key:" Width="110" VerticalAlignment="Center" />
+                    <Button x:Name="InsertKeyButton" DockPanel.Dock="Right" Content="Insert" Click="InsertKey_Click" Padding="8,0" Margin="4,0,0,0"
+                            ToolTip="Add the chosen key to the end of the sequence." />
                     <ComboBox x:Name="KeyCombo" DisplayMemberPath="Name" MaxDropDownHeight="300" />
                 </DockPanel>
                 <DockPanel x:Name="ModeRow" Margin="0,2">
