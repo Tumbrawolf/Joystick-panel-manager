@@ -15,6 +15,7 @@ using ClaudFlight.Core.Mapping;
 using ClaudFlight.Core.Models;
 using ClaudFlight.Core.Profiles;
 using ClaudFlight.Core.RawInput;
+using ClaudFlight.Core.StreamDock;
 using ClaudFlight.Core.VJoy;
 
 namespace ClaudFlight.App;
@@ -23,6 +24,7 @@ public partial class MainWindow : Window
 {
     private readonly DeviceManager _deviceManager = new();
     private readonly RawInputKeyboardManager _rawInputManager = new();
+    private readonly StreamDockManager _streamDockManager = new();
     private readonly VJoyManager _vjoyManager = new();
     private readonly ProfileStore _profileStore = new();
     private readonly AppSettingsStore _settingsStore = new();
@@ -54,7 +56,7 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
-        _engine = new MappingEngine(() => _deviceManager.Devices.Concat(_rawInputManager.Devices), _vjoyManager);
+        _engine = new MappingEngine(AllDevices, _vjoyManager);
 
         InitializeComponent();
         DataContext = this;
@@ -81,7 +83,14 @@ public partial class MainWindow : Window
             }
             RefreshDevices();
         };
+
+        // A StreamDock panel (VSD Craft device) reports this from its background read thread when
+        // a key with a new code first appears or the panel is unplugged.
+        _streamDockManager.DevicesChanged += () => Dispatcher.BeginInvoke(RefreshDevices);
     }
+
+    private IEnumerable<IPhysicalDevice> AllDevices() =>
+        _deviceManager.Devices.Concat(_rawInputManager.Devices).Concat(_streamDockManager.Devices);
 
     private void MainWindow_Loaded(object sender, RoutedEventArgs e)
     {
@@ -143,6 +152,7 @@ public partial class MainWindow : Window
         _engine.LoadProfile(new Profile());
         _deviceManager.Dispose();
         _rawInputManager.Dispose();
+        _streamDockManager.Dispose();
         _vjoyManager.Dispose();
         _trayIcon?.Dispose();
     }
@@ -224,6 +234,7 @@ public partial class MainWindow : Window
         var handle = new WindowInteropHelper(this).EnsureHandle();
         _deviceManager.Refresh(handle);
         _rawInputManager.Refresh();
+        _streamDockManager.Refresh();
 
         // Raw Input keyboard-type devices (the real keyboard, any macro pad/streaming panel)
         // start hidden the first time they're ever seen, so Live Monitor isn't flooded with every
@@ -238,7 +249,7 @@ public partial class MainWindow : Window
 
         HiddenDevices.Clear();
         var visible = new List<DeviceMonitorViewModel>();
-        foreach (var device in _deviceManager.Devices.Concat(_rawInputManager.Devices))
+        foreach (var device in AllDevices())
         {
             var label = _currentProfile.DeviceLabels.GetValueOrDefault(device.InstanceGuid, device.Name);
 
