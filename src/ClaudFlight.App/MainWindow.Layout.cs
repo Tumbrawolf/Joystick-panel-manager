@@ -75,10 +75,9 @@ public partial class MainWindow
         {
             foreach (var marker in page.Markers)
             {
-                var device = Devices.FirstOrDefault(d => d.DeviceGuid == marker.DeviceGuid);
-                var reading = device?.FindControl(marker.Kind, marker.Index);
-                var deviceLabel = device?.Label ?? _currentProfile.DeviceLabels.GetValueOrDefault(marker.DeviceGuid, "Device not connected");
-                var savedLabel = GetSavedLabel(marker.DeviceGuid, marker.Kind, marker.Index, DefaultControlLabel(marker.Kind, marker.Index));
+                var reading = Devices.FirstOrDefault(d => d.DeviceGuid == marker.DeviceGuid)?.FindControl(marker.Kind, marker.Index);
+                var deviceLabel = DeviceName(marker.DeviceGuid);
+                var savedLabel = SavedControlName(marker.DeviceGuid, marker.Kind, marker.Index);
                 var mapping = DescribeMarkerMappings(marker);
                 LayoutItems.Add(new LayoutMarkerViewModel(marker, reading, savedLabel, deviceLabel, mapping) { IsEditing = _isLayoutEditing });
             }
@@ -91,14 +90,10 @@ public partial class MainWindow
             foreach (var device in Devices)
             {
                 var group = new LayoutPaletteGroup(device.DeviceGuid, device.Label);
-                IEnumerable<INamedControl> controls = [.. device.Axes, .. device.Buttons, .. device.Povs];
-                foreach (var control in controls)
+                foreach (var (control, part) in device.ControlParts())
                 {
-                    foreach (var part in InputParts.For(control.Kind))
-                    {
-                        if (page.Markers.Any(m => m.DeviceGuid == device.DeviceGuid && m.Kind == control.Kind && m.Index == control.ControlIndex && m.Part == part)) continue;
-                        group.Items.Add(new LayoutPaletteItem(device.DeviceGuid, control.Kind, control.ControlIndex, part, control.Label + InputParts.Suffix(part)));
-                    }
+                    if (page.Markers.Any(m => m.DeviceGuid == device.DeviceGuid && m.Kind == control.Kind && m.Index == control.ControlIndex && m.Part == part)) continue;
+                    group.Items.Add(new LayoutPaletteItem(device.DeviceGuid, control.Kind, control.ControlIndex, part, control.Label + InputParts.Suffix(part)));
                 }
                 if (group.Items.Count > 0) LayoutPalette.Add(group);
             }
@@ -119,6 +114,24 @@ public partial class MainWindow
         ControlKind.Button => $"Button {index + 1}",
         _ => $"POV {index + 1}",
     };
+
+    // ---- Names for controls and devices, connected or not (one place for every list and window) ----
+
+    /// <summary>A device's name: its live card's label, else the name saved in the profile.</summary>
+    private string DeviceName(Guid deviceGuid, string whenUnknown = "Device not connected") =>
+        Devices.FirstOrDefault(d => d.DeviceGuid == deviceGuid)?.Label
+        ?? _currentProfile.DeviceLabels.GetValueOrDefault(deviceGuid, whenUnknown);
+
+    /// <summary>A control's name as saved in the profile, else its default ("Button 3", "X"...).</summary>
+    private string SavedControlName(Guid deviceGuid, ControlKind kind, int index) =>
+        GetSavedLabel(deviceGuid, kind, index, DefaultControlLabel(kind, index));
+
+    /// <summary>A control's name (live if its device is connected, else saved), with the part's
+    /// suffix for a hat direction or axis half.</summary>
+    private string ControlName(Guid deviceGuid, ControlKind kind, int index, InputPart part = InputPart.Whole) =>
+        (Devices.FirstOrDefault(d => d.DeviceGuid == deviceGuid)?.FindControl(kind, index)?.Label
+         ?? SavedControlName(deviceGuid, kind, index))
+        + InputParts.Suffix(part);
 
     // ---- Remaps (used by the markers and RemapWindow) ----
 
@@ -210,11 +223,7 @@ public partial class MainWindow
     internal string? ShiftControlName()
     {
         if (_currentProfile.ShiftControl is not { } shift) return null;
-        var device = Devices.FirstOrDefault(d => d.DeviceGuid == shift.DeviceGuid);
-        var label = device?.FindControl(shift.Kind, shift.Index)?.Label
-                    ?? GetSavedLabel(shift.DeviceGuid, shift.Kind, shift.Index, DefaultControlLabel(shift.Kind, shift.Index));
-        var deviceLabel = device?.Label ?? _currentProfile.DeviceLabels.GetValueOrDefault(shift.DeviceGuid, "not connected");
-        return $"{label}{InputParts.Suffix(shift.Part)} ({deviceLabel})";
+        return $"{ControlName(shift.DeviceGuid, shift.Kind, shift.Index, shift.Part)} ({DeviceName(shift.DeviceGuid, "not connected")})";
     }
 
     /// <summary>The text under a marker: its normal mappings, then its shifted ones marked ⇧.</summary>
@@ -288,11 +297,8 @@ public partial class MainWindow
     /// loaded ready to change.</summary>
     internal void OpenRemap(Guid deviceGuid, ControlKind kind, int index, InputPart part, object? editOutput = null)
     {
-        var device = Devices.FirstOrDefault(d => d.DeviceGuid == deviceGuid);
-        var label = (device?.FindControl(kind, index)?.Label
-                     ?? GetSavedLabel(deviceGuid, kind, index, DefaultControlLabel(kind, index))) + InputParts.Suffix(part);
-        var deviceLabel = device?.Label ?? _currentProfile.DeviceLabels.GetValueOrDefault(deviceGuid, "Device not connected");
-        new RemapWindow(this, new RemapSlot(deviceGuid, kind, index, part, label, deviceLabel), editOutput).ShowDialog();
+        var slot = new RemapSlot(deviceGuid, kind, index, part, ControlName(deviceGuid, kind, index, part), DeviceName(deviceGuid));
+        new RemapWindow(this, slot, editOutput).ShowDialog();
     }
 
     // ---- Positioning ----
@@ -495,14 +501,8 @@ public partial class MainWindow
     {
         if (_layoutPage is null) return;
 
-        // Start in the middle, stepping down (then across) past any label already there, so a new
-        // one never lands hidden on top of an earlier one.
-        double x = 0.5, y = 0.5;
-        while (_layoutPage.Texts.Any(t => Math.Abs(t.X - x) < 0.04 && Math.Abs(t.Y - y) < 0.03))
-        {
-            y += 0.05;
-            if (y > 0.95) { y = 0.1; x = x >= 0.9 ? 0.1 : x + 0.1; }
-        }
+        // As near the middle as possible without covering a control's marker or another label.
+        var (x, y) = _layoutPage.FreeSpotForText();
         var text = new LayoutText { Text = "Text", X = x, Y = y };
         _layoutPage.Texts.Add(text);
 

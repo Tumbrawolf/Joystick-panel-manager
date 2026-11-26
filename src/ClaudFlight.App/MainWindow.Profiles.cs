@@ -11,10 +11,19 @@ using Microsoft.Win32;
 namespace ClaudFlight.App;
 
 /// <summary>One saved profile in the Profiles tab's list.</summary>
-public sealed record ProfileListItem(string Name, bool IsActive, string UsedBy);
+public sealed record ProfileListItem(string Name, bool IsActive, string UsedBy)
+{
+    /// <summary>What a screen reader says for the item.</summary>
+    public override string ToString() =>
+        Name + (IsActive ? " (active)" : "") + (string.IsNullOrEmpty(UsedBy) ? "" : $", {UsedBy}");
+}
 
 /// <summary>One "while this game runs, use this profile" entry in the Profiles tab.</summary>
-public sealed record GameEntryRow(GameProfileEntry Entry, string ProfileText, bool ProfileMissing);
+public sealed record GameEntryRow(GameProfileEntry Entry, string ProfileText, bool ProfileMissing)
+{
+    /// <summary>What a screen reader says for the row.</summary>
+    public override string ToString() => $"{Entry.ProcessName} uses {ProfileText}";
+}
 
 /// <summary>The Profiles tab: every saved profile (switch, new, duplicate, rename, delete,
 /// export, import) and the per-game profiles, plus the quick-switch dropdown in the bottom bar.</summary>
@@ -289,7 +298,34 @@ public partial class MainWindow
     // ---- Profiles for games ----
 
     /// <summary>Lists programs that have a window (the likely games) for the "Game" dropdown.</summary>
-    private void RefreshRunningPrograms()
+    private bool _listingPrograms;
+
+    /// <summary>Fills the game picker with programs that have a window. Listing them takes a moment
+    /// on a busy PC, so it's done in the background; the picker keeps whatever was typed meanwhile.</summary>
+    private async void RefreshRunningPrograms()
+    {
+        if (_listingPrograms) return;
+        _listingPrograms = true;
+        SortedSet<string> running;
+        try
+        {
+            running = await Task.Run(ProgramsWithWindows);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return;
+        }
+        finally
+        {
+            _listingPrograms = false;
+        }
+
+        var typed = GameProcessCombo.Text;
+        GameProcessCombo.ItemsSource = running;
+        GameProcessCombo.Text = typed;
+    }
+
+    private static SortedSet<string> ProgramsWithWindows()
     {
         var running = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var process in Process.GetProcesses())
@@ -302,11 +338,12 @@ public partial class MainWindow
             {
                 // exited while we looked
             }
-            process.Dispose();
+            finally
+            {
+                process.Dispose();
+            }
         }
-        var typed = GameProcessCombo.Text;
-        GameProcessCombo.ItemsSource = running;
-        GameProcessCombo.Text = typed;
+        return running;
     }
 
     private void RefreshRunningPrograms_Click(object sender, RoutedEventArgs e) => RefreshRunningPrograms();

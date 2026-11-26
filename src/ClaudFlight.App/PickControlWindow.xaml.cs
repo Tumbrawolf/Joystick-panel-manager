@@ -7,7 +7,10 @@ using ClaudFlight.Core.Models;
 namespace ClaudFlight.App;
 
 /// <summary>A control (or part of one) chosen in PickControlWindow.</summary>
-public sealed record PickedControl(Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, string Display);
+public sealed record PickedControl(Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, string Display)
+{
+    public override string ToString() => Display;
+}
 
 /// <summary>Picks any control to remap: from a list, or by pressing/moving it on the hardware
 /// (watched through Live Monitor's readings, which keep updating while this is open).</summary>
@@ -51,16 +54,12 @@ public partial class PickControlWindow : Window
         var items = new List<PickedControl>();
         if (DeviceCombo.SelectedItem is DeviceMonitorViewModel device)
         {
-            IEnumerable<INamedControl> controls = [.. device.Axes, .. device.Buttons, .. device.Povs];
-            foreach (var control in controls)
+            foreach (var (control, part) in device.ControlParts())
             {
-                foreach (var part in InputParts.For(control.Kind))
-                {
-                    var name = control.Label + InputParts.Suffix(part) + (part == InputPart.Whole && control.Kind != ControlKind.Button
-                        ? control.Kind == ControlKind.Axis ? "  (whole axis)" : "  (whole hat)"
-                        : "");
-                    items.Add(new PickedControl(device.DeviceGuid, control.Kind, control.ControlIndex, part, name));
-                }
+                var name = control.Label + InputParts.Suffix(part) + (part == InputPart.Whole && control.Kind != ControlKind.Button
+                    ? control.Kind == ControlKind.Axis ? "  (whole axis)" : "  (whole hat)"
+                    : "");
+                items.Add(new PickedControl(device.DeviceGuid, control.Kind, control.ControlIndex, part, name));
             }
         }
         ControlList.ItemsSource = items;

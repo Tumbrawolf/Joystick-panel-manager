@@ -68,6 +68,9 @@ public abstract class LayoutItemViewModel : ObservableBase
 /// name, dimmed.</summary>
 public sealed class LayoutMarkerViewModel : LayoutItemViewModel
 {
+    /// <summary>What a screen reader says for this item in a list.</summary>
+    public override string ToString() => $"{Label} ({DeviceLabel})";
+
     private readonly string _savedLabel;
 
     public LayoutMarkerViewModel(LayoutMarker marker, INamedControl? reading, string savedLabel, string deviceLabel, string mappingText)
@@ -150,6 +153,8 @@ public sealed class LayoutMarkerViewModel : LayoutItemViewModel
 /// <summary>A free text label on the layout page.</summary>
 public sealed class LayoutTextViewModel(LayoutText model) : LayoutItemViewModel
 {
+    public override string ToString() => Text;
+
     public LayoutText Model { get; } = model;
 
     public override double X { get => Model.X; set => Model.X = value; }
@@ -180,11 +185,16 @@ public sealed class LayoutTextViewModel(LayoutText model) : LayoutItemViewModel
 
 /// <summary>A control (or part of one) that isn't on the current layout page yet, listed in the
 /// editing palette.</summary>
-public sealed record LayoutPaletteItem(Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, string Label);
+public sealed record LayoutPaletteItem(Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, string Label)
+{
+    public override string ToString() => Label;
+}
 
 /// <summary>One device's not-yet-placed controls in the editing palette.</summary>
 public sealed class LayoutPaletteGroup(Guid deviceGuid, string deviceLabel)
 {
+    public override string ToString() => DeviceLabel;
+
     public Guid DeviceGuid { get; } = deviceGuid;
     public string DeviceLabel { get; } = deviceLabel;
     public ObservableCollection<LayoutPaletteItem> Items { get; } = [];

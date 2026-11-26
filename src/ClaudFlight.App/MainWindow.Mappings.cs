@@ -14,7 +14,11 @@ namespace ClaudFlight.App;
 /// <summary>One line of the Mappings tab: something one control (or part of one) does.</summary>
 public sealed record MappingListRow(
     string Device, string Control, string Layer, string Type, string Output,
-    Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, object? Source);
+    Guid DeviceGuid, ControlKind Kind, int Index, InputPart Part, object? Source)
+{
+    /// <summary>What a screen reader says for the row.</summary>
+    public override string ToString() => $"{Device} {Control}: {Output} ({Layer} layer)";
+}
 
 /// <summary>A choice in one of the Mappings tab's filter dropdowns.</summary>
 public sealed record MappingFilterOption(string Display, object? Value)
@@ -79,12 +83,8 @@ public partial class MainWindow
 
         MappingListRow Row(InputRef source, InputPart part, bool shifted, string type, string output, object? model)
         {
-            var device = Devices.FirstOrDefault(d => d.DeviceGuid == source.DeviceGuid);
-            var deviceLabel = device?.Label ?? _currentProfile.DeviceLabels.GetValueOrDefault(source.DeviceGuid, "Device not connected");
-            var control = (device?.FindControl(source.Kind, source.Index)?.Label
-                           ?? GetSavedLabel(source.DeviceGuid, source.Kind, source.Index, DefaultControlLabel(source.Kind, source.Index)))
-                          + InputParts.Suffix(part);
-            return new MappingListRow(deviceLabel, control, shifted ? "Shifted" : "Normal", type, output,
+            return new MappingListRow(DeviceName(source.DeviceGuid), ControlName(source.DeviceGuid, source.Kind, source.Index, part),
+                shifted ? "Shifted" : "Normal", type, output,
                 source.DeviceGuid, source.Kind, source.Index, part, model);
         }
     }
