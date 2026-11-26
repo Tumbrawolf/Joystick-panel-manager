@@ -9,15 +9,34 @@
         Title="ClaudFlight" Height="720" Width="1100">
     <Window.Resources>
         <conv:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
-        <ContextMenu x:Key="HideControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
-            <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
-        </ContextMenu>
         <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         <!-- Buttons get their own menu: keys with a screen (StreamDock) can also take a picture. -->
+        <ContextMenu x:Key="AxisControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Remap whole axis..." Click="RemapControl_Click" Tag="Whole" FontWeight="SemiBold" />
+            <MenuItem Header="Remap + end (as a button)..." Click="RemapControl_Click" Tag="Positive" />
+            <MenuItem Header="Remap − end (as a button)..." Click="RemapControl_Click" Tag="Negative" />
+            <Separator />
+            <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
+        </ContextMenu>
+        <ContextMenu x:Key="PovControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Remap whole hat..." Click="RemapControl_Click" Tag="Whole" FontWeight="SemiBold" />
+            <MenuItem Header="Remap ↑ direction..." Click="RemapControl_Click" Tag="Up" />
+            <MenuItem Header="Remap → direction..." Click="RemapControl_Click" Tag="Right" />
+            <MenuItem Header="Remap ↓ direction..." Click="RemapControl_Click" Tag="Down" />
+            <MenuItem Header="Remap ← direction..." Click="RemapControl_Click" Tag="Left" />
+            <Separator />
+            <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
+        </ContextMenu>
         <ContextMenu x:Key="ButtonControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Remap..." Click="RemapControl_Click" Tag="Whole" FontWeight="SemiBold" />
+            <Separator />
             <MenuItem Header="Set image..." Click="SetButtonImage_Click"
                       Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
-            <MenuItem Header="Clear image" Click="ClearButtonImage_Click" IsEnabled="{Binding HasImage}"
+            <MenuItem Header="Clear image" Click="ClearButtonImage_Click" IsEnabled="{Binding HasOwnImage}"
+                      Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
+            <MenuItem Header="Set pressed image..." Click="SetPressedButtonImage_Click"
+                      Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
+            <MenuItem Header="Clear pressed image" Click="ClearPressedButtonImage_Click" IsEnabled="{Binding HasOwnPressedImage}"
                       Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
             <Separator Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
             <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
@@ -44,26 +63,24 @@
             <StackPanel Orientation="Horizontal">
                 <TextBlock x:Name="VJoyStatusText" Text="vJoy: checking..." VerticalAlignment="Center" Margin="0,0,16,0" />
                 <Button Content="Refresh Devices" Click="RefreshDevices_Click" Padding="8,2" />
+                <CheckBox x:Name="KeyboardInjectionToggle" Content="Keyboard keys on" VerticalAlignment="Center" FontWeight="Bold" Margin="16,0,0,0"
+                          Checked="KeyboardInjectionToggle_Changed" Unchecked="KeyboardInjectionToggle_Changed"
+                          ToolTip="Lets mappings that send keyboard keys actually press them. Starts OFF every launch, on purpose: simulating real keyboard input is something some anti-cheat software flags, so only turn it on for games where that's fine. Also in the tray icon's menu." />
             </StackPanel>
         </Border>
 
-        <!-- Profile bar -->
-        <Border DockPanel.Dock="Bottom" Background="#EEEEEE" BorderBrush="#CCCCCC" BorderThickness="0,1,0,0" Padding="8">
+        <!-- Profile bar: quick switch; everything else is on the Profiles tab -->
+        <Border DockPanel.Dock="Bottom" Background="#EEEEEE" BorderBrush="#CCCCCC" BorderThickness="0,1,0,0" Padding="8,4">
             <StackPanel Orientation="Horizontal">
                 <TextBlock Text="Profile:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                <TextBox x:Name="ProfileNameBox" Width="140" Margin="0,0,8,0" />
-                <Button Content="New" Click="NewProfile_Click" Padding="8,2" Margin="0,0,4,0" />
-                <Button Content="Save" Click="SaveProfile_Click" Padding="8,2" Margin="0,0,12,0" />
-                <ComboBox x:Name="ProfileListCombo" Width="160" Margin="0,0,4,0" />
-                <Button Content="Load" Click="LoadProfile_Click" Padding="8,2" Margin="0,0,12,0" />
-                <Button Content="Export..." Click="ExportProfile_Click" Padding="8,2" Margin="0,0,4,0"
-                        ToolTip="Save the current profile as a .json file anywhere - for backup or sharing with someone else." />
-                <Button Content="Import..." Click="ImportProfile_Click" Padding="8,2"
-                        ToolTip="Load a profile from a .json file anywhere (e.g. one someone shared with you). Becomes the active profile; click Save to also keep it in the list above." />
+                <ComboBox x:Name="QuickProfileCombo" Width="200" ItemsSource="{Binding ProfileNames}" SelectionChanged="QuickProfileCombo_SelectionChanged"
+                          ToolTip="Switch profile. Create, rename, copy, delete and set up per-game profiles on the Profiles tab." />
+                <TextBlock x:Name="GameStatusBarText" VerticalAlignment="Center" Margin="12,0,0,0" Foreground="#2E7D32" FontWeight="SemiBold" />
+                <TextBlock Text="Changes save automatically." VerticalAlignment="Center" Margin="12,0,0,0" Foreground="Gray" FontSize="11" />
             </StackPanel>
         </Border>
 
-        <TabControl>
+        <TabControl x:Name="MainTabs" SelectionChanged="MainTabs_SelectionChanged">
             <!-- Live Monitor -->
             <TabItem Header="Live Monitor">
                 <DockPanel>
@@ -98,6 +115,8 @@
                                             </Grid.ColumnDefinitions>
                                             <TextBlock Grid.Column="0" Text="{Binding DeviceName}" FontSize="11" Foreground="Gray" VerticalAlignment="Center" />
                                             <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                                <Button Content="Map all to vJoy..." Click="MapAllToVJoy_Click" Padding="4,0" FontSize="10" Margin="0,0,2,0"
+                                                        ToolTip="Map every control on this device that isn't mapped yet onto a vJoy device in one go - axes to the same-named vJoy axis where free, buttons and hats to the next free slots." />
                                                 <Button Content="Export" Click="ExportDevice_Click" Padding="4,0" FontSize="10" Margin="0,0,2,0"
                                                         ToolTip="Save just this device's renames, calibration, and mappings to a .json file - for backup or sharing." />
                                                 <Button Content="Import" Click="ImportDevice_Click" Padding="4,0" FontSize="10" Margin="0,0,2,0"
@@ -106,6 +125,13 @@
                                             </StackPanel>
                                         </Grid>
                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontWeight="Bold" Margin="0,0,0,8" />
+
+                                        <StackPanel Margin="0,0,0,8" Visibility="{Binding HasKeyScreens, Converter={StaticResource BoolToVisibility}}">
+                                            <CheckBox Content="Show names on keys without a picture" IsChecked="{Binding ShowKeyNames}" Click="KeyScreenOption_Click" FontSize="11"
+                                                      ToolTip="Keys with no picture of their own show their name (as typed under the key below) and what they're mapped to." />
+                                            <CheckBox Content="Light up keys while pressed" IsChecked="{Binding HighlightPressedKeys}" Click="KeyScreenOption_Click" FontSize="11" Margin="0,2,0,0"
+                                                      ToolTip="Keys with no pressed picture of their own get a bright frame while held." />
+                                        </StackPanel>
 
                                         <ItemsControl ItemsSource="{Binding AxisModeRows}" Margin="0,0,0,8"
                                                       Visibility="{Binding AxisModeRows.Count, Converter={StaticResource CountToVisibilityConverter}}">
@@ -129,7 +155,7 @@
                                         <ItemsControl ItemsSource="{Binding Axes}">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type vm:AxisReadingViewModel}">
-                                                    <Grid Margin="0,2" ContextMenu="{StaticResource HideControlMenu}">
+                                                    <Grid Margin="0,2" ContextMenu="{StaticResource AxisControlMenu}">
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="90" />
                                                             <ColumnDefinition Width="*" />
@@ -156,12 +182,12 @@
                                                                 AllowDrop="True" Drop="ButtonLamp_Drop"
                                                                 PreviewMouseLeftButtonDown="ButtonLamp_PreviewMouseLeftButtonDown"
                                                                 MouseMove="ButtonLamp_MouseMove">
-                                                        <Image Source="{Binding Image}" Width="40" Height="40" Margin="0,0,0,1"
+                                                        <Image Source="{Binding ShownImage}" Width="40" Height="40" Margin="0,0,0,1"
                                                                ToolTip="The picture on this key's screen. Right-click to change or clear it, or drop a picture file here.">
                                                             <Image.Style>
                                                                 <Style TargetType="Image">
                                                                     <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding Image}" Value="{x:Null}">
+                                                                        <DataTrigger Binding="{Binding ShownImage}" Value="{x:Null}">
                                                                             <Setter Property="Visibility" Value="Collapsed" />
                                                                         </DataTrigger>
                                                                     </Style.Triggers>
@@ -169,7 +195,7 @@
                                                             </Image.Style>
                                                         </Image>
                                                         <Border Style="{StaticResource ButtonLampStyle}" HorizontalAlignment="Center"
-                                                                ToolTip="This is the number to type into Mapping's Source #/Target # field for this button. On a Raw Input keyboard device, drag to reorder.">
+                                                                ToolTip="The button's number on this device. Right-click to remap it. On a Raw Input keyboard device, drag to reorder.">
                                                             <TextBlock Text="{Binding DisplayNumber}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="10" />
                                                         </Border>
                                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" FontSize="9" TextAlignment="Center"
@@ -182,10 +208,10 @@
                                         <ItemsControl ItemsSource="{Binding Povs}" Margin="0,8,0,0">
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type vm:PovReadingViewModel}">
-                                                    <StackPanel Orientation="Horizontal" Margin="0,2" ContextMenu="{StaticResource HideControlMenu}">
+                                                    <StackPanel Orientation="Horizontal" Margin="0,2" ContextMenu="{StaticResource PovControlMenu}">
                                                         <TextBox Text="{Binding Label, UpdateSourceTrigger=PropertyChanged}" Width="80"
                                                                  BorderThickness="0" Background="Transparent" Padding="0"
-                                                                 ToolTip="{Binding DisplayNumber, StringFormat='Type {0} into Mapping\'s Source #/Target # for this POV'}" />
+                                                                 ToolTip="Right-click to remap this hat (whole, or one direction at a time)" />
                                                         <TextBlock Text=": " />
                                                         <TextBlock Text="{Binding DirectionText, Mode=OneWay}" />
                                                     </StackPanel>
@@ -206,6 +232,174 @@
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
                     </ScrollViewer>
+                </DockPanel>
+            </TabItem>
+
+            <!-- Layout: a background picture (e.g. a controls diagram) with control markers on it -->
+            <TabItem x:Name="LayoutTab" Header="Layout">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="0,0,0,1" Padding="8" Background="#F7F7F7">
+                        <WrapPanel>
+                            <TextBlock Text="Page:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                            <ComboBox x:Name="LayoutPageCombo" Width="160" ItemsSource="{Binding LayoutPages}" DisplayMemberPath="Name"
+                                      SelectionChanged="LayoutPageCombo_SelectionChanged" Margin="0,0,4,0" />
+                            <TextBox x:Name="LayoutPageNameBox" Width="140" Margin="0,0,4,0" VerticalContentAlignment="Center"
+                                     Text="{Binding SelectedItem.Name, ElementName=LayoutPageCombo, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Rename this page" />
+                            <Button Content="New page" Click="LayoutNewPage_Click" Padding="8,2" Margin="0,0,4,0" />
+                            <Button x:Name="LayoutDeletePageButton" Content="Delete page" Click="LayoutDeletePage_Click" Padding="8,2" Margin="0,0,16,0" />
+                            <Button Content="Set background..." Click="LayoutSetBackground_Click" Padding="8,2" Margin="0,0,4,0"
+                                    ToolTip="Load a picture of your controls (a manual's diagram, a photo, a schematic) to place control markers on. You can also drop a picture file onto the page." />
+                            <Button x:Name="LayoutClearBackgroundButton" Content="Clear background" Click="LayoutClearBackground_Click" Padding="8,2" Margin="0,0,4,0" />
+                            <Button x:Name="LayoutExportImageButton" Content="Export image..." Click="LayoutExportImage_Click" Padding="8,2" Margin="0,0,16,0"
+                                    ToolTip="Save this page - picture, markers, mappings and text - as a PNG, e.g. to print as a reference card or use as a sim kneeboard page." />
+                            <CheckBox x:Name="LayoutEditToggle" Content="Edit layout" VerticalAlignment="Center" Margin="0,0,8,0"
+                                      Checked="LayoutEditToggle_Changed" Unchecked="LayoutEditToggle_Changed"
+                                      ToolTip="Place controls and text on the picture and drag them into position. Untick to lock them in place - clicking a control then opens its remap editor." />
+                            <Button x:Name="LayoutAddTextButton" Content="Add text" Click="LayoutAddText_Click" Padding="8,2"
+                                    ToolTip="Put a free text label on the page (a title, a note, a name for part of the picture). Drag it by its ⠿ handle; right-click for size/delete." />
+                        </WrapPanel>
+                    </Border>
+
+                    <!-- Palette of controls not yet on this page (edit mode only) -->
+                    <Border x:Name="LayoutPalettePanel" DockPanel.Dock="Right" Width="230" Visibility="Collapsed"
+                            BorderBrush="#CCCCCC" BorderThickness="1,0,0,0" Background="#FAFAFA">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="8" FontSize="11" Foreground="#444444"
+                                       Text="Drag a control onto the picture to place it (or double-click it to drop it in the middle). Drag markers to move them; right-click one to take it off." />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding LayoutPalette}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="{x:Type vm:LayoutPaletteGroup}">
+                                            <StackPanel Margin="8,4,8,8">
+                                                <DockPanel Margin="0,0,0,2">
+                                                    <Button DockPanel.Dock="Right" Content="Add all" Click="LayoutAddAll_Click" FontSize="10" Padding="4,0"
+                                                            ToolTip="Put all of this device's remaining controls on the page in a grid, ready to drag into place" />
+                                                    <TextBlock Text="{Binding DeviceLabel}" FontWeight="Bold" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                                </DockPanel>
+                                                <ItemsControl ItemsSource="{Binding Items}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate DataType="{x:Type vm:LayoutPaletteItem}">
+                                                            <Border Padding="4,2" Margin="0,1" Background="White" BorderBrush="#CCCCCC" BorderThickness="1" CornerRadius="3"
+                                                                    Cursor="Hand"
+                                                                    PreviewMouseLeftButtonDown="LayoutPaletteItem_PreviewMouseLeftButtonDown"
+                                                                    MouseMove="LayoutPaletteItem_MouseMove">
+                                                                <TextBlock Text="{Binding Label}" FontSize="11" TextTrimming="CharacterEllipsis" />
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+
+                    <Grid x:Name="LayoutArea" Background="#3A3A3A" ClipToBounds="True" AllowDrop="True"
+                          SizeChanged="LayoutArea_SizeChanged" DragOver="LayoutArea_DragOver" Drop="LayoutArea_Drop">
+                        <Image x:Name="LayoutBackgroundImage" Stretch="Uniform" Margin="16" />
+                        <TextBlock x:Name="LayoutHintText" Foreground="#DDDDDD" FontSize="14" TextWrapping="Wrap" TextAlignment="Center"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="460" IsHitTestVisible="False" />
+                        <ItemsControl x:Name="LayoutMarkersControl" ItemsSource="{Binding LayoutItems}" Cursor="Hand">
+                            <ItemsControl.Resources>
+                                <!-- Free text label: plain text when locked; a drag handle + editable box while editing. -->
+                                <DataTemplate DataType="{x:Type vm:LayoutTextViewModel}">
+                                    <Border Background="#B0000000" CornerRadius="3" Padding="4,1" Cursor="Arrow" SizeChanged="LayoutItem_SizeChanged">
+                                        <Border.ContextMenu>
+                                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Header="Bigger text" Click="LayoutTextBigger_Click" />
+                                                <MenuItem Header="Smaller text" Click="LayoutTextSmaller_Click" />
+                                                <Separator />
+                                                <MenuItem Header="Delete text" Click="LayoutTextDelete_Click" />
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <Grid>
+                                            <TextBlock Text="{Binding Text}" FontSize="{Binding FontSize}" Foreground="White">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <DockPanel>
+                                                <DockPanel.Style>
+                                                    <Style TargetType="DockPanel">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </DockPanel.Style>
+                                                <TextBlock Text="⠿" Foreground="White" FontSize="16" Cursor="SizeAll" VerticalAlignment="Center" Margin="0,0,4,0"
+                                                           Background="Transparent" ToolTip="Drag to move"
+                                                           MouseLeftButtonDown="LayoutItem_MouseLeftButtonDown"
+                                                           MouseMove="LayoutItem_MouseMove"
+                                                           MouseLeftButtonUp="LayoutItem_MouseLeftButtonUp" />
+                                                <TextBox Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}" FontSize="{Binding FontSize}"
+                                                         Foreground="White" Background="Transparent" CaretBrush="White" BorderBrush="#88FFFFFF"
+                                                         BorderThickness="0,0,0,1" AcceptsReturn="True" MinWidth="40" />
+                                            </DockPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                                <!-- Control marker: lights up live, shows its mappings; click to remap. -->
+                                <DataTemplate DataType="{x:Type vm:LayoutMarkerViewModel}">
+                                    <Border CornerRadius="4" Padding="6,2" BorderThickness="1" BorderBrush="White" MinWidth="36"
+                                            ToolTip="{Binding ToolTipText}"
+                                            SizeChanged="LayoutItem_SizeChanged"
+                                            MouseLeftButtonDown="LayoutItem_MouseLeftButtonDown"
+                                            MouseMove="LayoutItem_MouseMove"
+                                            MouseLeftButtonUp="LayoutItem_MouseLeftButtonUp">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="#E0202020" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                        <Setter Property="Background" Value="#F03AA655" />
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsConnected}" Value="False">
+                                                        <Setter Property="Opacity" Value="0.55" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Border.ContextMenu>
+                                            <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Header="Remap..." Click="LayoutRemapMarker_Click" FontWeight="Bold" />
+                                                <MenuItem Header="Take off this page" Click="LayoutRemoveMarker_Click" />
+                                            </ContextMenu>
+                                        </Border.ContextMenu>
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Label}" Foreground="White" FontSize="11" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                                            <TextBlock Text="{Binding MappingText}" Foreground="#FFD27F" FontSize="10" HorizontalAlignment="Center"
+                                                       Visibility="{Binding HasMapping, Converter={StaticResource BoolToVisibility}}" />
+                                            <ProgressBar Height="4" Width="50" Minimum="0" Maximum="1" Value="{Binding AxisValue, Mode=OneWay}" Margin="0,2,0,1"
+                                                         Visibility="{Binding IsAxis, Converter={StaticResource BoolToVisibility}}" />
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.Resources>
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <Canvas />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="Canvas.Left" Value="{Binding Left}" />
+                                    <Setter Property="Canvas.Top" Value="{Binding Top}" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                        </ItemsControl>
+                    </Grid>
                 </DockPanel>
             </TabItem>
 
@@ -253,7 +447,8 @@
             </TabItem>
 
             <!-- Mapping -->
-            <TabItem Header="Mapping">
+            <!-- Mappings: everything mapped, one line each; changes go through the remap window -->
+            <TabItem x:Name="MappingsTab" Header="Mappings">
                 <DockPanel Margin="8">
                     <Expander DockPanel.Dock="Top" Header="What is vJoy, and how do I set this up? (click to expand)" Margin="0,0,0,8"
                               Background="#F7F7F7" BorderBrush="#CCCCCC" BorderThickness="1" Padding="8">
@@ -290,10 +485,10 @@
 
                             <TextBlock TextWrapping="Wrap" FontWeight="Bold" Text="Putting it together" Margin="0,0,0,2" />
                             <TextBlock TextWrapping="Wrap" Margin="0,0,0,8">
-                                Below, each row you add is a "mapping": read this control from this physical device (the
-                                Source), write it to this slot on this vJoy device (the Target). Add one mapping per control you
-                                want to use - e.g. your stick's X/Y axes, throttle lever, rudder twist, and switch panel buttons -
-                                all targeting vJoy device 1. Once you're done, open Windows' "Set up USB game controllers"
+                                Each line below is a "mapping": this control on this physical device writes to this slot on this
+                                vJoy device. Add one per control you want to use - e.g. your stick's X/Y axes, throttle lever,
+                                rudder twist, and switch panel buttons - all onto vJoy device 1 ("Map all to vJoy..." on a device's
+                                card in Live Monitor does a whole device in one go). Once you're done, open Windows' "Set up USB game controllers"
                                 (search the Start Menu for it) to see and test-wiggle "vJoy Device" like any other controller
                                 before jumping into a game. Finally, in your game's control bindings, bind to "vJoy Device"
                                 instead of your physical hardware.
@@ -301,79 +496,38 @@
                         </StackPanel>
                     </Expander>
 
-                    <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="1" Padding="8" Margin="0,0,0,8">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Source device:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="SourceDeviceCombo" Width="150" ItemsSource="{Binding Devices}" DisplayMemberPath="Label" Margin="0,0,12,0"
-                                      SelectionChanged="SourceDeviceCombo_SelectionChanged"
-                                      ToolTip="The physical device to read this mapping's input from." />
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
+                        <Button DockPanel.Dock="Left" Content="Add..." Click="AddMapping_Click" Padding="12,2" Margin="0,0,12,0" FontWeight="SemiBold"
+                                ToolTip="Pick a control (or press it on your hardware) and choose what it does" />
+                        <TextBlock DockPanel.Dock="Left" Text="Show:" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <ComboBox x:Name="MappingDeviceFilterCombo" DockPanel.Dock="Left" Width="160" Margin="0,0,4,0"
+                                  ItemsSource="{Binding MappingDeviceFilters}" SelectionChanged="MappingFilter_SelectionChanged" />
+                        <ComboBox x:Name="MappingLayerFilterCombo" DockPanel.Dock="Left" Width="100" Margin="0,0,4,0"
+                                  ItemsSource="{Binding MappingLayerFilters}" SelectionChanged="MappingFilter_SelectionChanged" />
+                        <ComboBox x:Name="MappingTypeFilterCombo" DockPanel.Dock="Left" Width="100" Margin="0,0,12,0"
+                                  ItemsSource="{Binding MappingTypeFilters}" SelectionChanged="MappingFilter_SelectionChanged" />
+                        <TextBlock x:Name="MappingCountText" VerticalAlignment="Center" Foreground="Gray" TextTrimming="CharacterEllipsis" />
+                    </DockPanel>
+                    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11" Foreground="#555555"
+                               Text="Double-click a line (or click Change) to change it. Click a column header to sort. You can also remap by right-clicking a control on Live Monitor, or clicking a marker on the Layout tab." />
 
-                            <TextBlock Text="Kind:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="SourceKindCombo" Width="80" ItemsSource="{Binding ControlKindValues}" SelectedIndex="0" Margin="0,0,12,0"
-                                      SelectionChanged="SourceKindCombo_SelectionChanged"
-                                      ToolTip="Axis = a continuous control like a stick tilt, throttle lever, or dial (reads as a range of values).&#10;Button = a simple on/off switch or push button.&#10;Pov = a hat switch, reporting up to 8 directions plus centered." />
-
-                            <TextBlock Text="Source:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="SourceControlCombo" Width="150" ItemsSource="{Binding SourceControlOptions}" DisplayMemberPath="Display" Margin="0,0,12,0"
-                                      ToolTip="The specific axis/button/POV to read, picked from what's actually on the selected device." />
-
-                            <TextBlock Text="vJoy device #:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <TextBox x:Name="TargetVJoyIdBox" Width="40" Text="1" Margin="0,0,12,0" TextChanged="TargetVJoyIdBox_TextChanged"
-                                     ToolTip="Which virtual vJoy device (1-16) to write this mapping's output to. This is the number the game will see - e.g. 'vJoy Device 1'. Multiple mappings can share the same vJoy device number to build up one combined virtual controller." />
-
-                            <TextBlock Text="Target:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="TargetControlCombo" Width="150" ItemsSource="{Binding TargetControlOptions}" DisplayMemberPath="Display" Margin="0,0,12,0"
-                                      ToolTip="The specific axis/button/POV slot on the vJoy device to write to." />
-
-                            <Button Content="Add mapping" Click="AddBinding_Click" Padding="8,2" Margin="0,0,6,0" />
-                            <Button Content="Auto-populate all controls" Click="AutoPopulateMappings_Click" Padding="8,2"
-                                    ToolTip="Adds one mapping for every axis/button/POV on the selected source device, onto the selected vJoy device # - filling in the next free slot per control and skipping anything that would collide with an existing mapping or exceed vJoy's configured capacity. The one-at-a-time Add mapping above still works as normal; use whichever you prefer, and edit/remove rows below either way." />
-                        </StackPanel>
-                    </Border>
-
-                    <DataGrid x:Name="BindingsGrid" ItemsSource="{Binding BindingRows}" AutoGenerateColumns="False" CanUserAddRows="False"
-                              CellEditEnding="BindingsGrid_CellEditEnding">
+                    <DataGrid x:Name="MappingsGrid" ItemsSource="{Binding MappingRows}" AutoGenerateColumns="False" IsReadOnly="True"
+                              CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single" HeadersVisibility="Column"
+                              GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#E6E6E6"
+                              MouseDoubleClick="MappingsGrid_MouseDoubleClick">
                         <DataGrid.Columns>
-                            <DataGridTextColumn Header="Source Device" Binding="{Binding SourceDevice.Label}" IsReadOnly="True" Width="140" />
-                            <DataGridTextColumn Header="Name" Binding="{Binding SourceControl.Label, UpdateSourceTrigger=PropertyChanged}" Width="120">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="The source control's friendly name - editable here too, synced with Live Monitor and Calibration." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Kind" Binding="{Binding SourceKind}" IsReadOnly="True" Width="70">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="Axis (continuous), Button (on/off), or Pov (hat switch)." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Source #" Binding="{Binding SourceIndexText}" IsReadOnly="True" Width="90">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="The specific control read from the source device (DirectInput axis name, or 1-based button/POV number)." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="vJoy Device #" Binding="{Binding TargetVJoyDeviceId, UpdateSourceTrigger=PropertyChanged}" Width="100">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="Which virtual vJoy device (1-16) this mapping writes to - the device number games bind to. Editable directly here." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Target #" Binding="{Binding TargetIndexText, UpdateSourceTrigger=PropertyChanged}" Width="90">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="The specific control on the vJoy device this mapping writes to (vJoy axis name, or 1-based button/POV number). Editable directly here." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridTemplateColumn Header="" Width="80">
+                            <DataGridTextColumn Header="Device" Binding="{Binding Device}" Width="150" />
+                            <DataGridTextColumn Header="Control" Binding="{Binding Control}" Width="150" />
+                            <DataGridTextColumn Header="Layer" Binding="{Binding Layer}" Width="70" />
+                            <DataGridTextColumn Header="Type" Binding="{Binding Type}" Width="80" />
+                            <DataGridTextColumn Header="Does" Binding="{Binding Output}" Width="*" />
+                            <DataGridTemplateColumn Header="" Width="130" CanUserSort="False">
                                 <DataGridTemplateColumn.CellTemplate>
                                     <DataTemplate>
-                                        <Button Content="Remove" Click="RemoveBinding_Click" Padding="4,0" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="Change" Click="ChangeMapping_Click" Padding="6,0" Margin="0,0,4,0" />
+                                            <Button Content="Remove" Click="RemoveMapping_Click" Padding="6,0" />
+                                        </StackPanel>
                                     </DataTemplate>
                                 </DataGridTemplateColumn.CellTemplate>
                             </DataGridTemplateColumn>
@@ -381,118 +535,113 @@
                     </DataGrid>
                 </DockPanel>
             </TabItem>
+            <!-- Profiles: every saved profile, and which profile goes with which game -->
+            <TabItem x:Name="ProfilesTab" Header="Profiles">
+                <Grid Margin="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" MinWidth="280" />
+                        <ColumnDefinition Width="12" />
+                        <ColumnDefinition Width="*" MinWidth="320" />
+                    </Grid.ColumnDefinitions>
 
-            <!-- Keyboard Mapping -->
-            <TabItem Header="Keyboard Mapping">
-                <DockPanel Margin="8">
-                    <Border DockPanel.Dock="Top" BorderBrush="#E0C060" Background="#FFF8E6" BorderThickness="1" Padding="8" Margin="0,0,0,8">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal">
-                                <CheckBox x:Name="KeyboardInjectionToggle" Content="Enable keyboard injection" VerticalAlignment="Center" FontWeight="Bold"
-                                          Checked="KeyboardInjectionToggle_Changed" Unchecked="KeyboardInjectionToggle_Changed"
-                                          ToolTip="Off by default every time the app starts. While off, none of the mappings below do anything, even though they're saved." />
+                    <GroupBox Grid.Column="0" Header="Profiles" Padding="6">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11" Foreground="#444444"
+                                       Text="A profile holds everything you set up: names, calibration, mappings, layout pages and key pictures. The active one saves automatically as you go. Double-click a profile to switch to it." />
+                            <StackPanel DockPanel.Dock="Bottom" Margin="0,6,0,0">
+                                <DockPanel Margin="0,0,0,6">
+                                    <TextBlock Text="Name:" VerticalAlignment="Center" Width="45" />
+                                    <Button DockPanel.Dock="Right" Content="Rename" Click="RenameProfile_Click" Padding="10,2" Margin="4,0,0,0" />
+                                    <TextBox x:Name="ProfileRenameBox" KeyDown="ProfileRenameBox_KeyDown" VerticalContentAlignment="Center"
+                                             ToolTip="Type a new name for the selected profile, then click Rename (or press Enter)." />
+                                </DockPanel>
+                                <WrapPanel>
+                                    <Button x:Name="SwitchToProfileButton" Content="Switch to it" Click="SwitchToProfile_Click" Padding="10,2" Margin="0,0,4,4" FontWeight="SemiBold" />
+                                    <Button Content="New" Click="NewProfile_Click" Padding="10,2" Margin="0,0,4,4"
+                                            ToolTip="Start an empty profile and switch to it (the current one is saved first)." />
+                                    <Button Content="Duplicate" Click="DuplicateProfile_Click" Padding="10,2" Margin="0,0,4,4"
+                                            ToolTip="Copy the selected profile under a new name - e.g. to start a game's profile from your usual setup." />
+                                    <Button x:Name="DeleteProfileButton" Content="Delete" Click="DeleteProfile_Click" Padding="10,2" Margin="0,0,12,4"
+                                            ToolTip="Delete the selected profile (not the active one - switch away from it first)." />
+                                    <Button Content="Export..." Click="ExportProfile_Click" Padding="10,2" Margin="0,0,4,4"
+                                            ToolTip="Save the selected profile as a .json file anywhere - for backup or sharing." />
+                                    <Button Content="Import..." Click="ImportProfile_Click" Padding="10,2" Margin="0,0,4,4"
+                                            ToolTip="Add a profile from a .json file (e.g. one someone shared) to this list." />
+                                </WrapPanel>
                             </StackPanel>
-                            <TextBlock TextWrapping="Wrap" Margin="0,4,0,0" Foreground="#886600">
-                                Starts OFF every launch, on purpose - this has to simulate real keyboard input to work, which some
-                                anti-cheat software flags as suspicious. Only turn it on for games/situations where that's fine.
-                            </TextBlock>
-                        </StackPanel>
-                    </Border>
-
-                    <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,8" Foreground="#555555">
-                        Maps a physical axis/button/POV straight to a simulated keyboard key press - for games or functions that
-                        take keyboard input but not joystick input. This is independent of the Mapping tab's vJoy mappings; the
-                        same control can have both at once.
-                    </TextBlock>
-
-                    <Border DockPanel.Dock="Top" BorderBrush="#CCCCCC" BorderThickness="1" Padding="8" Margin="0,0,0,8">
-                        <WrapPanel Orientation="Horizontal">
-                            <TextBlock Text="Source device:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="KeySourceDeviceCombo" Width="150" ItemsSource="{Binding Devices}" DisplayMemberPath="Label" Margin="0,0,12,0"
-                                      SelectionChanged="KeySourceDeviceCombo_SelectionChanged" />
-
-                            <TextBlock Text="Kind:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="KeySourceKindCombo" Width="80" ItemsSource="{Binding ControlKindValues}" SelectedIndex="0" Margin="0,0,12,0"
-                                      SelectionChanged="KeySourceKindCombo_SelectionChanged" />
-
-                            <TextBlock Text="Source:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="KeySourceControlCombo" Width="150" ItemsSource="{Binding KeySourceControlOptions}" DisplayMemberPath="Display" Margin="0,0,12,0" />
-
-                            <TextBlock Text="Key:" VerticalAlignment="Center" Margin="0,0,4,0" />
-                            <ComboBox x:Name="KeyNameCombo" Width="90" ItemsSource="{Binding KeyOptions}" DisplayMemberPath="Name" SelectedIndex="0" Margin="0,0,12,0"
-                                      ToolTip="The key to simulate pressing. F13-F24 are good choices since real keyboards don't have them, so they can't collide with normal typing." />
-
-                            <CheckBox x:Name="HoldWhilePressedCheck" Content="Hold" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"
-                                      ToolTip="Button/Pov only: checked = the key stays held down for as long as the control is held. Unchecked = a single tap is sent each time it's pressed." />
-
-                            <TextBlock Text="POV dir:" VerticalAlignment="Center" Margin="0,0,4,0"
-                                       ToolTip="Pov only: which hat direction activates this key - 0=North, 1=East, 2=South, 3=West." />
-                            <TextBox x:Name="PovDirectionBox" Width="30" Text="0" Margin="0,0,12,0"
-                                     ToolTip="Pov only: which hat direction activates this key - 0=North, 1=East, 2=South, 3=West." />
-
-                            <TextBlock Text="Axis threshold:" VerticalAlignment="Center" Margin="0,0,4,0"
-                                       ToolTip="Axis only: 0..1 magnitude the axis must be pushed past to trigger the key." />
-                            <TextBox x:Name="AxisThresholdBox" Width="40" Text="0.5" Margin="0,0,4,0"
-                                     ToolTip="Axis only: 0..1 magnitude the axis must be pushed past to trigger the key." />
-                            <CheckBox x:Name="AxisAboveCheck" Content="Above" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"
-                                      ToolTip="Axis only: checked = trigger when pushed positive past the threshold. Unchecked = trigger when pushed negative past it." />
-
-                            <Button Content="Add key mapping" Click="AddKeyBinding_Click" Padding="8,2" />
-                        </WrapPanel>
-                    </Border>
-
-                    <DataGrid x:Name="KeyBindingsGrid" ItemsSource="{Binding KeyBindingRows}" AutoGenerateColumns="False" CanUserAddRows="False"
-                              CellEditEnding="KeyBindingsGrid_CellEditEnding">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Source Device" Binding="{Binding SourceDevice.Label}" IsReadOnly="True" Width="130" />
-                            <DataGridTextColumn Header="Name" Binding="{Binding SourceControl.Label, UpdateSourceTrigger=PropertyChanged}" Width="110" />
-                            <DataGridTextColumn Header="Kind" Binding="{Binding SourceKind}" IsReadOnly="True" Width="60" />
-                            <DataGridTextColumn Header="Source #" Binding="{Binding SourceIndexText}" IsReadOnly="True" Width="80" />
-                            <DataGridTextColumn Header="Key" Binding="{Binding KeyName, UpdateSourceTrigger=PropertyChanged}" Width="80">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="The simulated key - must match a name from the Key dropdown above exactly (e.g. F13, A, Space)." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridCheckBoxColumn Header="Hold" Binding="{Binding HoldWhilePressed, UpdateSourceTrigger=PropertyChanged}" Width="50">
-                                <DataGridCheckBoxColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="Button/Pov only: checked = hold the key while the control is held; unchecked = single tap per press." />
-                                    </Style>
-                                </DataGridCheckBoxColumn.HeaderStyle>
-                            </DataGridCheckBoxColumn>
-                            <DataGridTextColumn Header="POV Dir" Binding="{Binding PovDirection, UpdateSourceTrigger=PropertyChanged}" Width="60">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="Pov only: 0=North, 1=East, 2=South, 3=West." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridTextColumn Header="Threshold" Binding="{Binding AxisThreshold, UpdateSourceTrigger=PropertyChanged}" Width="70">
-                                <DataGridTextColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="Axis only: 0..1 magnitude that must be crossed to trigger the key." />
-                                    </Style>
-                                </DataGridTextColumn.HeaderStyle>
-                            </DataGridTextColumn>
-                            <DataGridCheckBoxColumn Header="Above" Binding="{Binding AxisAboveThreshold, UpdateSourceTrigger=PropertyChanged}" Width="55">
-                                <DataGridCheckBoxColumn.HeaderStyle>
-                                    <Style TargetType="DataGridColumnHeader">
-                                        <Setter Property="ToolTip" Value="Axis only: checked = trigger on the positive side of the threshold; unchecked = the negative side." />
-                                    </Style>
-                                </DataGridCheckBoxColumn.HeaderStyle>
-                            </DataGridCheckBoxColumn>
-                            <DataGridTemplateColumn Header="" Width="80">
-                                <DataGridTemplateColumn.CellTemplate>
+                            <ListBox x:Name="ProfilesList" ItemsSource="{Binding ProfileItems}"
+                                     SelectionChanged="ProfilesList_SelectionChanged" MouseDoubleClick="ProfilesList_MouseDoubleClick">
+                                <ListBox.ItemTemplate>
                                     <DataTemplate>
-                                        <Button Content="Remove" Click="RemoveKeyBinding_Click" Padding="4,0" />
+                                        <StackPanel Margin="2,3">
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="{Binding Name}" FontSize="13">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                    <Setter Property="FontWeight" Value="Bold" />
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+                                                <TextBlock Text="  active" Foreground="#2E7D32" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                           Visibility="{Binding IsActive, Converter={StaticResource BoolToVisibility}}" />
+                                            </StackPanel>
+                                            <TextBlock Text="{Binding UsedBy}" Foreground="Gray" FontSize="11" />
+                                        </StackPanel>
                                     </DataTemplate>
-                                </DataGridTemplateColumn.CellTemplate>
-                            </DataGridTemplateColumn>
-                        </DataGrid.Columns>
-                    </DataGrid>
-                </DockPanel>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </DockPanel>
+                    </GroupBox>
+
+                    <GroupBox Grid.Column="2" Header="Profiles for games" Padding="6">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,6" FontSize="11" Foreground="#444444"
+                                       Text="While one of these games is running, ClaudFlight switches to its profile automatically (checked every few seconds), and back to the profile you had before once the game closes. Changes you make meanwhile are saved into the game's profile." />
+                            <TextBlock x:Name="GameStatusText" DockPanel.Dock="Top" TextWrapping="Wrap" Margin="0,0,0,6" Foreground="#2E7D32" FontWeight="SemiBold" />
+
+                            <GroupBox DockPanel.Dock="Bottom" Header="Add a game" Padding="6" Margin="0,6,0,0">
+                                <StackPanel>
+                                    <DockPanel Margin="0,2">
+                                        <TextBlock Text="Game:" Width="60" VerticalAlignment="Center" />
+                                        <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseGame_Click" Padding="6,0" Margin="4,0,0,0"
+                                                ToolTip="Pick the game's .exe file" />
+                                        <Button DockPanel.Dock="Right" Content="↻" Click="RefreshRunningPrograms_Click" Padding="6,0" Margin="4,0,0,0"
+                                                ToolTip="Refresh the list of running programs" />
+                                        <ComboBox x:Name="GameProcessCombo" IsEditable="True"
+                                                  ToolTip="The game's program name without .exe (e.g. DCS, X-Plane, FlightSimulator). Programs running now are listed - start the game first to pick it here, or type the name, or browse for the .exe." />
+                                    </DockPanel>
+                                    <DockPanel Margin="0,2">
+                                        <TextBlock Text="Profile:" Width="60" VerticalAlignment="Center" />
+                                        <ComboBox x:Name="GameProfileCombo" ItemsSource="{Binding ProfileNames}" />
+                                    </DockPanel>
+                                    <Button Content="Add" Click="AddGameProfile_Click" HorizontalAlignment="Left" Padding="14,2" Margin="60,6,0,0" />
+                                </StackPanel>
+                            </GroupBox>
+
+                            <Grid>
+                                <TextBlock x:Name="NoGameEntriesText" Text="No games yet - add one below." FontStyle="Italic" Foreground="Gray" Margin="2" />
+                                <ItemsControl ItemsSource="{Binding GameEntryRows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel Margin="0,3">
+                                                <Button DockPanel.Dock="Right" Content="Remove" Click="RemoveGameProfile_Click" Padding="8,0" />
+                                                <TextBlock VerticalAlignment="Center" TextWrapping="Wrap">
+                                                    <Run Text="{Binding Entry.ProcessName, Mode=OneWay}" FontWeight="Bold" />
+                                                    <Run Text="  uses  " Foreground="Gray" />
+                                                    <Run Text="{Binding ProfileText, Mode=OneWay}" />
+                                                </TextBlock>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Grid>
+                        </DockPanel>
+                    </GroupBox>
+                </Grid>
             </TabItem>
         </TabControl>
     </DockPanel>

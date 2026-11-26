@@ -39,20 +39,6 @@ public partial class MainWindow : Window
     public ObservableCollection<DeviceMonitorViewModel> Devices { get; } = [];
     public ObservableCollection<HiddenDeviceViewModel> HiddenDevices { get; } = [];
     public ObservableCollection<CalibrationRowViewModel> CalibrationRows { get; } = [];
-    public ObservableCollection<BindingRowViewModel> BindingRows { get; } = [];
-    public ControlKind[] ControlKindValues { get; } = Enum.GetValues<ControlKind>();
-
-    /// <summary>One pickable option in the Mapping tab's Source/Target dropdowns: what to show
-    /// the user (Display) and the technical text that actually goes into the Binding (IndexText -
-    /// an axis name like "X", or a 1-based number).</summary>
-    public sealed record ControlOption(string Display, string IndexText);
-
-    public ObservableCollection<ControlOption> SourceControlOptions { get; } = [];
-    public ObservableCollection<ControlOption> TargetControlOptions { get; } = [];
-
-    public ObservableCollection<KeyBindingRowViewModel> KeyBindingRows { get; } = [];
-    public ObservableCollection<ControlOption> KeySourceControlOptions { get; } = [];
-    public IReadOnlyList<KeyOption> KeyOptions { get; } = KeyCatalog.Keys;
 
     public MainWindow()
     {
@@ -102,8 +88,8 @@ public partial class MainWindow : Window
 
         // Auto-load whatever profile was active last time the app was closed, so renames,
         // calibration, and mappings persist across restarts without an explicit Load click.
-        var settings = _settingsStore.Load();
-        if (settings.LastProfileName is { } lastName)
+        _settings = _settingsStore.Load();
+        if (_settings.LastProfileName is { } lastName)
         {
             try { _currentProfile = _profileStore.Load(lastName); }
             catch (IOException) { /* profile file missing/moved; fall back to a blank profile */ }
@@ -120,10 +106,14 @@ public partial class MainWindow : Window
 
         _engine.LoadProfile(_currentProfile);
         RefreshDevices();
-        RebuildBindingRowsFromProfile();
-        RebuildKeyBindingRowsFromProfile();
+        RebuildLayoutPages();
         RefreshProfileList();
         _timer.Start();
+
+        _autosaveTimer.Tick += (_, _) => AutoSaveCurrentProfile();
+        _autosaveTimer.Start();
+        _gameWatchTimer.Tick += (_, _) => CheckGameProfiles();
+        _gameWatchTimer.Start();
     }
 
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
@@ -147,7 +137,10 @@ public partial class MainWindow : Window
         }
 
         _timer.Stop();
+        _autosaveTimer.Stop();
+        _gameWatchTimer.Stop();
         AutoSaveCurrentProfile();
+        RememberCurrentProfile();
 
         _engine.LoadProfile(new Profile());
         _deviceManager.Dispose();
@@ -171,6 +164,7 @@ public partial class MainWindow : Window
             : null;
 
         var menu = new System.Windows.Forms.ContextMenuStrip();
+        AddTrayKeyboardItem(menu);
         menu.Items.Add("Show ClaudFlight", null, (_, _) => ShowFromTray());
         menu.Items.Add("Exit", null, (_, _) => ExitFromTray());
 
@@ -197,22 +191,47 @@ public partial class MainWindow : Window
         Close();
     }
 
-    /// <summary>Silently persists whatever the current profile's state is (including any renames
-    /// made this session) so it comes back automatically on the next launch, without requiring
-    /// an explicit Save click.</summary>
+    private AppSettings _settings = new();
+    private string? _lastSavedJson;
+    private readonly DispatcherTimer _autosaveTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+
+    /// <summary>Silently persists the current profile (including renames typed into Live
+    /// Monitor) whenever anything in it has changed - runs every couple of seconds and on exit,
+    /// so nothing is lost if the app is closed any other way. Writes only when the saved JSON
+    /// would actually differ.</summary>
     private void AutoSaveCurrentProfile()
     {
         HarvestInputLabels();
         if (string.IsNullOrWhiteSpace(_currentProfile.Name)) _currentProfile.Name = "Default";
 
+        var json = _profileStore.Serialize(_currentProfile);
+        if (json == _lastSavedJson) return;
+
         try
         {
-            _profileStore.Save(_currentProfile);
-            _settingsStore.Save(new AppSettings { LastProfileName = _currentProfile.Name });
+            var isNew = !_profileStore.Exists(_currentProfile.Name);
+            _profileStore.SaveSerialized(_currentProfile.Name, json);
+            _lastSavedJson = json;
+            if (_currentProfile.KeyScreenSettings.Any(k => k.ShowNames)) ApplyButtonImages(); // names/mappings may have changed
+            if (isNew) RefreshProfileList();
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Best-effort autosave; don't block shutdown over a save failure.
+            // Best-effort; try again on the next tick.
+        }
+    }
+
+    /// <summary>Records which profile to load next launch: the current one, or - while a game's
+    /// profile was switched in automatically - the one the user had before.</summary>
+    private void RememberCurrentProfile()
+    {
+        _settings.LastProfileName = _profileBeforeGame ?? _currentProfile.Name;
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
         }
     }
 
@@ -259,7 +278,15 @@ public partial class MainWindow : Window
                 continue;
             }
 
-            var vm = new DeviceMonitorViewModel(device.InstanceGuid, device.Name) { Label = label, PresentAxes = device.PresentAxes };
+            var screenSettings = _currentProfile.KeyScreenSettings.FirstOrDefault(k => k.DeviceGuid == device.InstanceGuid);
+            var vm = new DeviceMonitorViewModel(device.InstanceGuid, device.Name)
+            {
+                Label = label,
+                PresentAxes = device.PresentAxes,
+                HasKeyScreens = device is StreamDockDevice { ButtonCount: > 0 } panel && Enumerable.Range(0, panel.ButtonCount).Any(panel.HasKeyScreen),
+                ShowKeyNames = screenSettings?.ShowNames ?? false,
+                HighlightPressedKeys = screenSettings?.HighlightPressed ?? false,
+            };
 
             if (device is RawInputMouseDevice or RawInputCombinedDevice)
             {
@@ -319,8 +346,8 @@ public partial class MainWindow : Window
 
         ApplyButtonImages();
         RebuildCalibrationRows();
-        RefreshMappingFormOptions();
-        RefreshKeySourceControlOptions();
+        RebuildLayoutMarkers();
+        RebuildMappingList();
     }
 
     /// <summary>Builds one axis-mode row (see AxisModeRowViewModel) for a Raw Input mouse-style
@@ -393,11 +420,60 @@ public partial class MainWindow : Window
     {
         if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel button }) return;
 
-        _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == button.DeviceGuid && i.ButtonIndex == button.Index);
+        UpdateButtonImageEntry(button, entry => entry.Jpeg = null);
+    }
+
+    /// <summary>Right-click "Set pressed image..." - shown instead while the key is held.</summary>
+    private void SetPressedButtonImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel { HasScreen: true } button }) return;
+
+        var dialog = new OpenFileDialog { Title = $"Picture for '{button.Label}' while pressed", Filter = ImageFileFilter };
+        if (dialog.ShowDialog(this) != true) return;
+
+        SetButtonImage(button, dialog.FileName, pressed: true);
+    }
+
+    private void ClearPressedButtonImage_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: ButtonReadingViewModel button }) return;
+
+        UpdateButtonImageEntry(button, entry => entry.PressedJpeg = null);
+    }
+
+    /// <summary>The "Show names" / "Light up while pressed" checkboxes on a StreamDock panel's card.</summary>
+    private void KeyScreenOption_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement { DataContext: DeviceMonitorViewModel device }) return;
+
+        var settings = _currentProfile.KeyScreenSettings.FirstOrDefault(k => k.DeviceGuid == device.DeviceGuid);
+        if (settings is null)
+        {
+            settings = new KeyScreenSettings { DeviceGuid = device.DeviceGuid };
+            _currentProfile.KeyScreenSettings.Add(settings);
+        }
+        settings.ShowNames = device.ShowKeyNames;
+        settings.HighlightPressed = device.HighlightPressedKeys;
+        if (!settings.ShowNames && !settings.HighlightPressed) _currentProfile.KeyScreenSettings.Remove(settings);
         ApplyButtonImages();
     }
 
-    private void SetButtonImage(ButtonReadingViewModel button, string path)
+    /// <summary>Changes one key's picture entry, dropping it once it holds no pictures at all.</summary>
+    private void UpdateButtonImageEntry(ButtonReadingViewModel button, Action<ButtonImageEntry> change)
+    {
+        var entry = _currentProfile.ButtonImages.LastOrDefault(i => i.DeviceGuid == button.DeviceGuid && i.ButtonIndex == button.Index);
+        if (entry is null)
+        {
+            entry = new ButtonImageEntry { DeviceGuid = button.DeviceGuid, ButtonIndex = button.Index };
+            _currentProfile.ButtonImages.Add(entry);
+        }
+        _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == button.DeviceGuid && i.ButtonIndex == button.Index && i != entry);
+        change(entry);
+        if (entry.Jpeg is null && entry.PressedJpeg is null) _currentProfile.ButtonImages.Remove(entry);
+        ApplyButtonImages();
+    }
+
+    private void SetButtonImage(ButtonReadingViewModel button, string path, bool pressed = false)
     {
         byte[] jpeg;
         try
@@ -410,23 +486,70 @@ public partial class MainWindow : Window
             return;
         }
 
-        _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == button.DeviceGuid && i.ButtonIndex == button.Index);
-        _currentProfile.ButtonImages.Add(new ButtonImageEntry { DeviceGuid = button.DeviceGuid, ButtonIndex = button.Index, Jpeg = jpeg });
-        ApplyButtonImages();
+        UpdateButtonImageEntry(button, entry =>
+        {
+            if (pressed) entry.PressedJpeg = jpeg;
+            else entry.Jpeg = jpeg;
+        });
     }
 
+    // Generated key pictures, reused while their text/source doesn't change (so a redraw only
+    // sends keys whose picture really changed).
+    private readonly Dictionary<string, byte[]> _namePictures = [];
+    private readonly Dictionary<byte[], byte[]> _highlightPictures = new(ReferenceEqualityComparer.Instance);
+    private byte[]? _blankHighlight;
+
     /// <summary>Sends the current profile's button pictures to every connected StreamDock panel
-    /// (each only redraws the keys that changed) and shows them on the Live Monitor tiles.</summary>
+    /// (each only redraws the keys that changed) and shows them on the Live Monitor tiles. Keys
+    /// with no picture of their own get a generated name picture / pressed highlight if the
+    /// panel's options ask for one.</summary>
     private void ApplyButtonImages()
     {
+        if (_namePictures.Count > 500) _namePictures.Clear();
+        if (_highlightPictures.Count > 500) _highlightPictures.Clear();
+
+        var shown = new Dictionary<(Guid, int), (byte[]? Normal, byte[]? Pressed)>();
         foreach (var device in _streamDockManager.Devices.OfType<StreamDockDevice>())
         {
+            var settings = _currentProfile.KeyScreenSettings.FirstOrDefault(k => k.DeviceGuid == device.InstanceGuid);
+            var deviceVm = Devices.FirstOrDefault(d => d.DeviceGuid == device.InstanceGuid);
             var images = new Dictionary<int, byte[]>();
-            foreach (var entry in _currentProfile.ButtonImages.Where(i => i.DeviceGuid == device.InstanceGuid))
+            var pressedImages = new Dictionary<int, byte[]>();
+            for (var index = 0; index < device.ButtonCount; index++)
             {
-                if (device.HasKeyScreen(entry.ButtonIndex)) images[entry.ButtonIndex] = entry.Jpeg;
+                if (!device.HasKeyScreen(index)) continue;
+                var entry = _currentProfile.ButtonImages.LastOrDefault(i => i.DeviceGuid == device.InstanceGuid && i.ButtonIndex == index);
+
+                var normal = entry?.Jpeg;
+                if (normal is null && settings?.ShowNames == true)
+                {
+                    var name = deviceVm?.FindControl(ControlKind.Button, index)?.Label
+                               ?? GetSavedLabel(device.InstanceGuid, ControlKind.Button, index, device.ButtonDeviceNames.GetValueOrDefault(index, $"{index + 1}"));
+                    var mapping = DescribeMappings(device.InstanceGuid, ControlKind.Button, index, InputPart.Whole);
+                    var key = name + "\n" + mapping;
+                    if (!_namePictures.TryGetValue(key, out normal))
+                    {
+                        normal = KeyImages.FromText(name.Trim(), mapping, StreamDockDevice.KeyImageSize);
+                        _namePictures[key] = normal;
+                    }
+                }
+
+                var pressed = entry?.PressedJpeg;
+                if (pressed is null && settings?.HighlightPressed == true)
+                {
+                    if (normal is null) pressed = _blankHighlight ??= KeyImages.Highlight(null, StreamDockDevice.KeyImageSize);
+                    else if (!_highlightPictures.TryGetValue(normal, out pressed))
+                    {
+                        pressed = KeyImages.Highlight(normal, StreamDockDevice.KeyImageSize);
+                        _highlightPictures[normal] = pressed;
+                    }
+                }
+
+                if (normal is not null) images[index] = normal;
+                if (pressed is not null) pressedImages[index] = pressed;
+                shown[(device.InstanceGuid, index)] = (normal, pressed);
             }
-            device.SetButtonImages(images);
+            device.SetButtonImages(images, pressedImages);
         }
 
         foreach (var device in Devices)
@@ -434,7 +557,11 @@ public partial class MainWindow : Window
             foreach (var button in device.Buttons.Where(b => b.HasScreen))
             {
                 var entry = _currentProfile.ButtonImages.LastOrDefault(i => i.DeviceGuid == device.DeviceGuid && i.ButtonIndex == button.Index);
-                button.Image = entry is null ? null : KeyImages.ToThumbnail(entry.Jpeg);
+                button.HasOwnImage = entry?.Jpeg is not null;
+                button.HasOwnPressedImage = entry?.PressedJpeg is not null;
+                var (normal, pressed) = shown.GetValueOrDefault((device.DeviceGuid, button.Index));
+                button.Image = normal is null ? null : KeyImages.Decode(normal);
+                button.PressedImage = pressed is null ? null : KeyImages.Decode(pressed);
             }
         }
     }
@@ -507,30 +634,6 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Rebuilds BindingRows from _currentProfile.Bindings, resolving each row's live
-    /// device/control references against whatever's currently connected (Devices must already
-    /// be populated). Used both on startup and when loading a profile mid-session.</summary>
-    private void RebuildBindingRowsFromProfile()
-    {
-        BindingRows.Clear();
-        foreach (var binding in _currentProfile.Bindings)
-        {
-            var device = Devices.FirstOrDefault(d => d.DeviceGuid == binding.Source.DeviceGuid);
-            BindingRows.Add(BindingRowViewModel.FromBinding(binding, device));
-        }
-    }
-
-    private void RebuildProfileBindings()
-    {
-        _currentProfile.Bindings.Clear();
-        foreach (var row in BindingRows)
-        {
-            var binding = row.TryBuildBinding(out _);
-            if (binding is not null) _currentProfile.Bindings.Add(binding);
-        }
-        _engine.LoadProfile(_currentProfile);
-    }
-
     private void RefreshDevices_Click(object sender, RoutedEventArgs e) => RefreshDevices();
 
     private void Hyperlink_RequestNavigate(object sender, RequestNavigateEventArgs e)
@@ -551,9 +654,10 @@ public partial class MainWindow : Window
 
         _currentProfile.ExcludedDeviceGuids.Add(device.DeviceGuid);
 
-        var removed = BindingRows.Where(r => r.SourceDeviceGuid == device.DeviceGuid).ToList();
-        foreach (var row in removed) BindingRows.Remove(row);
-        RebuildProfileBindings();
+        _currentProfile.Bindings.RemoveAll(b => b.Source.DeviceGuid == device.DeviceGuid);
+        _currentProfile.KeyBindings.RemoveAll(k => k.Source.DeviceGuid == device.DeviceGuid);
+        if (_currentProfile.ShiftControl?.DeviceGuid == device.DeviceGuid) _currentProfile.ShiftControl = null;
+        _engine.LoadProfile(_currentProfile);
 
         RefreshDevices();
     }
@@ -611,6 +715,7 @@ public partial class MainWindow : Window
             Bindings = _currentProfile.Bindings.Where(b => b.Source.DeviceGuid == guid).ToList(),
             KeyBindings = _currentProfile.KeyBindings.Where(k => k.Source.DeviceGuid == guid).ToList(),
             ButtonImages = _currentProfile.ButtonImages.Where(i => i.DeviceGuid == guid).ToList(),
+            KeyScreenSettings = _currentProfile.KeyScreenSettings.Where(k => k.DeviceGuid == guid).ToList(),
         };
     }
 
@@ -692,13 +797,17 @@ public partial class MainWindow : Window
         foreach (var image in imported.ButtonImages.Where(i => i.DeviceGuid == sourceGuid))
         {
             _currentProfile.ButtonImages.RemoveAll(i => i.DeviceGuid == targetGuid && i.ButtonIndex == image.ButtonIndex);
-            _currentProfile.ButtonImages.Add(new ButtonImageEntry { DeviceGuid = targetGuid, ButtonIndex = image.ButtonIndex, Jpeg = image.Jpeg });
+            _currentProfile.ButtonImages.Add(new ButtonImageEntry { DeviceGuid = targetGuid, ButtonIndex = image.ButtonIndex, Jpeg = image.Jpeg, PressedJpeg = image.PressedJpeg });
+        }
+
+        foreach (var screen in imported.KeyScreenSettings.Where(k => k.DeviceGuid == sourceGuid))
+        {
+            _currentProfile.KeyScreenSettings.RemoveAll(k => k.DeviceGuid == targetGuid);
+            _currentProfile.KeyScreenSettings.Add(new KeyScreenSettings { DeviceGuid = targetGuid, ShowNames = screen.ShowNames, HighlightPressed = screen.HighlightPressed });
         }
 
         _engine.LoadProfile(_currentProfile);
         RefreshDevices();
-        RebuildBindingRowsFromProfile();
-        RebuildKeyBindingRowsFromProfile();
     }
 
     private static Guid? FindAnyDeviceGuid(Profile profile)
@@ -818,244 +927,6 @@ public partial class MainWindow : Window
         RefreshDevices();
     }
 
-    private void AddBinding_Click(object sender, RoutedEventArgs e)
-    {
-        if (SourceDeviceCombo.SelectedItem is not DeviceMonitorViewModel sourceDevice)
-        {
-            MessageBox.Show(this, "Select a source device first.", "Add mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (SourceControlCombo.SelectedItem is not ControlOption sourceOption)
-        {
-            MessageBox.Show(this, "Select a source control first - this list is empty if the device has none of the selected Kind.", "Add mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (TargetControlCombo.SelectedItem is not ControlOption targetOption)
-        {
-            MessageBox.Show(this, "Select a target control first.", "Add mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var row = new BindingRowViewModel
-        {
-            SourceDeviceGuid = sourceDevice.DeviceGuid,
-            SourceDevice = sourceDevice,
-            SourceKind = (ControlKind)SourceKindCombo.SelectedItem,
-            SourceIndexText = sourceOption.IndexText,
-            TargetVJoyDeviceId = uint.TryParse(TargetVJoyIdBox.Text, out var id) ? id : 1,
-            TargetIndexText = targetOption.IndexText,
-        };
-
-        var binding = row.TryBuildBinding(out var error);
-        if (binding is null)
-        {
-            MessageBox.Show(this, error, "Add mapping", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-
-        row.SourceControl = sourceDevice.FindControl(binding.Source.Kind, binding.Source.Index);
-        BindingRows.Add(row);
-        RebuildProfileBindings();
-    }
-
-    /// <summary>Adds one mapping for every axis/button/POV on the selected source device, onto
-    /// the selected vJoy device - an alternative to adding mappings one at a time above. Axes
-    /// prefer the same-named vJoy axis (X-&gt;X, RotationZ-&gt;RotationZ, ...); if that's already
-    /// taken, or for buttons/POVs, it fills the next free slot, skipping anything that would
-    /// collide with an existing mapping on that vJoy device or exceed vJoy's configured capacity.
-    /// Existing mappings (however they were created) are left untouched, and every generated row
-    /// can be edited or removed afterward just like a manually-added one.</summary>
-    private void AutoPopulateMappings_Click(object sender, RoutedEventArgs e)
-    {
-        if (SourceDeviceCombo.SelectedItem is not DeviceMonitorViewModel device)
-        {
-            MessageBox.Show(this, "Select a source device first.", "Auto-populate mappings", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        var vjoyId = uint.TryParse(TargetVJoyIdBox.Text, out var id) ? id : 1u;
-
-        var usedAxes = new HashSet<VJoyAxis>(BindingRows
-            .Where(r => r.TargetVJoyDeviceId == vjoyId && r.SourceKind == ControlKind.Axis)
-            .Select(r => Enum.TryParse<VJoyAxis>(r.TargetIndexText, true, out var a) ? a : (VJoyAxis?)null)
-            .Where(a => a.HasValue).Select(a => a!.Value));
-        var usedButtons = new HashSet<int>(BindingRows
-            .Where(r => r.TargetVJoyDeviceId == vjoyId && r.SourceKind == ControlKind.Button)
-            .Select(r => int.TryParse(r.TargetIndexText, out var n) ? n : (int?)null)
-            .Where(n => n.HasValue).Select(n => n!.Value));
-        var usedPovs = new HashSet<int>(BindingRows
-            .Where(r => r.TargetVJoyDeviceId == vjoyId && r.SourceKind == ControlKind.Pov)
-            .Select(r => int.TryParse(r.TargetIndexText, out var n) ? n : (int?)null)
-            .Where(n => n.HasValue).Select(n => n!.Value));
-
-        var added = 0;
-        var skipped = 0;
-
-        foreach (var axis in device.Axes)
-        {
-            VJoyAxis? target = null;
-            if (Enum.TryParse<VJoyAxis>(axis.Axis.ToString(), out var sameNamed) && !usedAxes.Contains(sameNamed) &&
-                (!_vjoyManager.IsAvailable || _vjoyManager.AxisExists(vjoyId, sameNamed)))
-            {
-                target = sameNamed;
-            }
-            else
-            {
-                foreach (var candidate in Enum.GetValues<VJoyAxis>())
-                {
-                    if (usedAxes.Contains(candidate)) continue;
-                    if (_vjoyManager.IsAvailable && !_vjoyManager.AxisExists(vjoyId, candidate)) continue;
-                    target = candidate;
-                    break;
-                }
-            }
-
-            if (target is null) { skipped++; continue; }
-            usedAxes.Add(target.Value);
-            AddAutoMapping(device, ControlKind.Axis, axis.Axis.ToString(), vjoyId, target.Value.ToString());
-            added++;
-        }
-
-        var buttonCap = _vjoyManager.IsAvailable ? _vjoyManager.GetButtonCount(vjoyId) : int.MaxValue;
-        var nextButton = 1;
-        foreach (var button in device.Buttons)
-        {
-            while (usedButtons.Contains(nextButton)) nextButton++;
-            if (nextButton > buttonCap) { skipped++; continue; }
-            usedButtons.Add(nextButton);
-            AddAutoMapping(device, ControlKind.Button, button.DisplayNumber.ToString(), vjoyId, nextButton.ToString());
-            added++;
-            nextButton++;
-        }
-
-        var povCap = _vjoyManager.IsAvailable ? _vjoyManager.GetDiscretePovCount(vjoyId) : int.MaxValue;
-        var nextPov = 1;
-        foreach (var pov in device.Povs)
-        {
-            while (usedPovs.Contains(nextPov)) nextPov++;
-            if (nextPov > povCap) { skipped++; continue; }
-            usedPovs.Add(nextPov);
-            AddAutoMapping(device, ControlKind.Pov, pov.DisplayNumber.ToString(), vjoyId, nextPov.ToString());
-            added++;
-            nextPov++;
-        }
-
-        RebuildProfileBindings();
-
-        var message = $"Added {added} mapping(s) for '{device.Label}' onto vJoy device {vjoyId}.";
-        if (skipped > 0)
-        {
-            message += $"\n\n{skipped} control(s) were skipped - either every matching vJoy slot on that device was already used by another mapping, or vJoy device {vjoyId} isn't configured with enough axes/buttons/POVs (adjust that via vJoy's own \"Configure vJoy\" tool).";
-        }
-        message += "\n\nYou can edit vJoy Device #/Target # directly in the grid below, or remove any row.";
-        MessageBox.Show(this, message, "Auto-populate mappings", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private void AddAutoMapping(DeviceMonitorViewModel device, ControlKind kind, string sourceIndexText, uint vjoyId, string targetIndexText)
-    {
-        var row = new BindingRowViewModel
-        {
-            SourceDeviceGuid = device.DeviceGuid,
-            SourceDevice = device,
-            SourceKind = kind,
-            SourceIndexText = sourceIndexText,
-            TargetVJoyDeviceId = vjoyId,
-            TargetIndexText = targetIndexText,
-        };
-
-        var binding = row.TryBuildBinding(out _);
-        if (binding is null) return;
-
-        row.SourceControl = device.FindControl(binding.Source.Kind, binding.Source.Index);
-        BindingRows.Add(row);
-    }
-
-    /// <summary>Grid edits to vJoy Device #/Target # only land in the bound BindingRowViewModel
-    /// after this event returns, so the rebuild is deferred to the next dispatcher pass rather
-    /// than reading the (still stale) value synchronously here.</summary>
-    private void BindingsGrid_CellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
-    {
-        Dispatcher.BeginInvoke(RebuildProfileBindings, DispatcherPriority.Background);
-    }
-
-    private void SourceDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshMappingFormOptions();
-    private void SourceKindCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshMappingFormOptions();
-    private void TargetVJoyIdBox_TextChanged(object sender, TextChangedEventArgs e) => RefreshMappingFormOptions();
-
-    /// <summary>Repopulates the Mapping tab's Source/Target dropdowns to match whatever's actually
-    /// selected/available right now, so the user picks from real options instead of typing
-    /// technical identifiers by hand.</summary>
-    private void RefreshMappingFormOptions()
-    {
-        RefreshSourceControlOptions();
-        RefreshTargetControlOptions();
-    }
-
-    private void RefreshSourceControlOptions()
-    {
-        SourceControlOptions.Clear();
-        if (SourceDeviceCombo?.SelectedItem is not DeviceMonitorViewModel device) return;
-        if (SourceKindCombo?.SelectedItem is not ControlKind kind) return;
-
-        switch (kind)
-        {
-            case ControlKind.Axis:
-                foreach (var axis in device.Axes)
-                    SourceControlOptions.Add(new ControlOption($"{axis.Label} ({axis.Axis})", axis.Axis.ToString()));
-                break;
-            case ControlKind.Button:
-                foreach (var button in device.Buttons)
-                    SourceControlOptions.Add(new ControlOption($"{button.DisplayNumber} - {button.Label}", button.DisplayNumber.ToString()));
-                break;
-            case ControlKind.Pov:
-                foreach (var pov in device.Povs)
-                    SourceControlOptions.Add(new ControlOption($"{pov.DisplayNumber} - {pov.Label}", pov.DisplayNumber.ToString()));
-                break;
-        }
-
-        if (SourceControlCombo is { } combo && SourceControlOptions.Count > 0) combo.SelectedIndex = 0;
-    }
-
-    private void RefreshTargetControlOptions()
-    {
-        TargetControlOptions.Clear();
-        if (SourceKindCombo?.SelectedItem is not ControlKind kind) return;
-        var vjoyId = uint.TryParse(TargetVJoyIdBox?.Text, out var id) ? id : 1u;
-
-        switch (kind)
-        {
-            case ControlKind.Axis:
-                foreach (var axis in Enum.GetValues<VJoyAxis>())
-                {
-                    if (_vjoyManager.IsAvailable && !_vjoyManager.AxisExists(vjoyId, axis)) continue;
-                    TargetControlOptions.Add(new ControlOption(axis.ToString(), axis.ToString()));
-                }
-                break;
-            case ControlKind.Button:
-            {
-                var count = _vjoyManager.IsAvailable ? _vjoyManager.GetButtonCount(vjoyId) : 32;
-                for (var i = 1; i <= Math.Max(count, 1); i++) TargetControlOptions.Add(new ControlOption(i.ToString(), i.ToString()));
-                break;
-            }
-            case ControlKind.Pov:
-            {
-                var count = _vjoyManager.IsAvailable ? _vjoyManager.GetDiscretePovCount(vjoyId) : 4;
-                for (var i = 1; i <= Math.Max(count, 1); i++) TargetControlOptions.Add(new ControlOption(i.ToString(), i.ToString()));
-                break;
-            }
-        }
-
-        if (TargetControlCombo is { } targetCombo && TargetControlOptions.Count > 0) targetCombo.SelectedIndex = 0;
-    }
-
-    private void RemoveBinding_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { DataContext: BindingRowViewModel row })
-        {
-            BindingRows.Remove(row);
-            RebuildProfileBindings();
-        }
-    }
-
     private void SetMinFromLive_Click(object sender, RoutedEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: CalibrationRowViewModel row }) row.SetMinFromLive();
@@ -1076,93 +947,6 @@ public partial class MainWindow : Window
         if (sender is FrameworkElement { DataContext: CalibrationRowViewModel row }) row.SetMaxFromLive();
     }
 
-    private void RefreshProfileList()
-    {
-        var names = _profileStore.ListProfileNames().OrderBy(n => n).ToList();
-        ProfileListCombo.ItemsSource = names;
-        ProfileNameBox.Text = _currentProfile.Name;
-    }
-
-    private void NewProfile_Click(object sender, RoutedEventArgs e)
-    {
-        _currentProfile = new Profile();
-        BindingRows.Clear();
-        KeyBindingRows.Clear();
-        _engine.LoadProfile(_currentProfile);
-        RebuildCalibrationRows();
-        ApplyButtonImages();
-        ProfileNameBox.Text = _currentProfile.Name;
-    }
-
-    private void SaveProfile_Click(object sender, RoutedEventArgs e)
-    {
-        _currentProfile.Name = string.IsNullOrWhiteSpace(ProfileNameBox.Text) ? "Default" : ProfileNameBox.Text.Trim();
-        HarvestInputLabels();
-
-        _profileStore.Save(_currentProfile);
-        _settingsStore.Save(new AppSettings { LastProfileName = _currentProfile.Name });
-        RefreshProfileList();
-        MessageBox.Show(this, $"Saved profile '{_currentProfile.Name}'.", "Save profile", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
-    private void LoadProfile_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileListCombo.SelectedItem is not string name) return;
-
-        ApplyLoadedProfile(_profileStore.Load(name));
-        _settingsStore.Save(new AppSettings { LastProfileName = _currentProfile.Name });
-    }
-
-    private void ExportProfile_Click(object sender, RoutedEventArgs e)
-    {
-        _currentProfile.Name = string.IsNullOrWhiteSpace(ProfileNameBox.Text) ? "Default" : ProfileNameBox.Text.Trim();
-        HarvestInputLabels();
-
-        var dialog = new SaveFileDialog
-        {
-            Title = "Export profile",
-            Filter = "ClaudFlight profile (*.json)|*.json",
-            FileName = _currentProfile.Name,
-            DefaultExt = ".json",
-        };
-        if (dialog.ShowDialog(this) != true) return;
-
-        try
-        {
-            _profileStore.SaveToFile(_currentProfile, dialog.FileName);
-            MessageBox.Show(this, $"Exported profile '{_currentProfile.Name}' to:\n{dialog.FileName}", "Export profile", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
-        catch (IOException ex)
-        {
-            MessageBox.Show(this, $"Couldn't export the profile:\n{ex.Message}", "Export profile", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    private void ImportProfile_Click(object sender, RoutedEventArgs e)
-    {
-        var dialog = new OpenFileDialog
-        {
-            Title = "Import profile",
-            Filter = "ClaudFlight profile (*.json)|*.json",
-        };
-        if (dialog.ShowDialog(this) != true) return;
-
-        Profile imported;
-        try
-        {
-            imported = _profileStore.LoadFromFile(dialog.FileName);
-        }
-        catch (Exception ex) when (ex is IOException or System.Text.Json.JsonException or InvalidDataException)
-        {
-            MessageBox.Show(this, $"Couldn't import that file as a profile:\n{ex.Message}", "Import profile", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-
-        ApplyLoadedProfile(imported);
-        MessageBox.Show(this, $"Imported profile '{_currentProfile.Name}'.\n\nIt's now the active profile - click Save if you want it to also appear in the profile list above.",
-            "Import profile", MessageBoxButton.OK, MessageBoxImage.Information);
-    }
-
     /// <summary>Common tail end of switching to a newly-loaded-or-imported profile: wire it into
     /// the engine, apply its device/control renames to whatever's currently connected, and rebuild
     /// every dependent view.</summary>
@@ -1177,125 +961,10 @@ public partial class MainWindow : Window
             ApplyInputLabels(device);
         }
 
-        RebuildBindingRowsFromProfile();
-        RebuildKeyBindingRowsFromProfile();
+        RebuildMappingList();
         RebuildCalibrationRows();
         ApplyButtonImages();
-        ProfileNameBox.Text = _currentProfile.Name;
-    }
-
-    private void KeyboardInjectionToggle_Changed(object sender, RoutedEventArgs e)
-    {
-        _engine.KeyboardInjectionEnabled = KeyboardInjectionToggle.IsChecked == true;
-    }
-
-    /// <summary>Rebuilds KeyBindingRows from _currentProfile.KeyBindings, resolving each row's
-    /// live device/control references against whatever's currently connected.</summary>
-    private void RebuildKeyBindingRowsFromProfile()
-    {
-        KeyBindingRows.Clear();
-        foreach (var keyBinding in _currentProfile.KeyBindings)
-        {
-            var device = Devices.FirstOrDefault(d => d.DeviceGuid == keyBinding.Source.DeviceGuid);
-            KeyBindingRows.Add(KeyBindingRowViewModel.FromKeyBinding(keyBinding, device));
-        }
-    }
-
-    private void RebuildProfileKeyBindings()
-    {
-        _currentProfile.KeyBindings.Clear();
-        foreach (var row in KeyBindingRows)
-        {
-            var keyBinding = row.TryBuildKeyBinding(out _);
-            if (keyBinding is not null) _currentProfile.KeyBindings.Add(keyBinding);
-        }
-        _engine.LoadProfile(_currentProfile);
-    }
-
-    private void AddKeyBinding_Click(object sender, RoutedEventArgs e)
-    {
-        if (KeySourceDeviceCombo.SelectedItem is not DeviceMonitorViewModel device)
-        {
-            MessageBox.Show(this, "Select a source device first.", "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (KeySourceControlCombo.SelectedItem is not ControlOption sourceOption)
-        {
-            MessageBox.Show(this, "Select a source control first - this list is empty if the device has none of the selected Kind.", "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-        if (KeyNameCombo.SelectedItem is not KeyOption keyOption)
-        {
-            MessageBox.Show(this, "Select a key first.", "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var row = new KeyBindingRowViewModel
-        {
-            SourceDeviceGuid = device.DeviceGuid,
-            SourceDevice = device,
-            SourceKind = (ControlKind)KeySourceKindCombo.SelectedItem,
-            SourceIndexText = sourceOption.IndexText,
-            KeyName = keyOption.Name,
-            HoldWhilePressed = HoldWhilePressedCheck.IsChecked == true,
-            PovDirection = int.TryParse(PovDirectionBox.Text, out var povDir) ? povDir : 0,
-            AxisThreshold = double.TryParse(AxisThresholdBox.Text, out var threshold) ? threshold : 0.5,
-            AxisAboveThreshold = AxisAboveCheck.IsChecked == true,
-        };
-
-        var keyBinding = row.TryBuildKeyBinding(out var error);
-        if (keyBinding is null)
-        {
-            MessageBox.Show(this, error, "Add key mapping", MessageBoxButton.OK, MessageBoxImage.Error);
-            return;
-        }
-
-        row.SourceControl = device.FindControl(keyBinding.Source.Kind, keyBinding.Source.Index);
-        KeyBindingRows.Add(row);
-        RebuildProfileKeyBindings();
-    }
-
-    private void RemoveKeyBinding_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { DataContext: KeyBindingRowViewModel row })
-        {
-            KeyBindingRows.Remove(row);
-            RebuildProfileKeyBindings();
-        }
-    }
-
-    private void KeySourceDeviceCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshKeySourceControlOptions();
-    private void KeySourceKindCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshKeySourceControlOptions();
-
-    private void RefreshKeySourceControlOptions()
-    {
-        KeySourceControlOptions.Clear();
-        if (KeySourceDeviceCombo?.SelectedItem is not DeviceMonitorViewModel device) return;
-        if (KeySourceKindCombo?.SelectedItem is not ControlKind kind) return;
-
-        switch (kind)
-        {
-            case ControlKind.Axis:
-                foreach (var axis in device.Axes)
-                    KeySourceControlOptions.Add(new ControlOption($"{axis.Label} ({axis.Axis})", axis.Axis.ToString()));
-                break;
-            case ControlKind.Button:
-                foreach (var button in device.Buttons)
-                    KeySourceControlOptions.Add(new ControlOption($"{button.DisplayNumber} - {button.Label}", button.DisplayNumber.ToString()));
-                break;
-            case ControlKind.Pov:
-                foreach (var pov in device.Povs)
-                    KeySourceControlOptions.Add(new ControlOption($"{pov.DisplayNumber} - {pov.Label}", pov.DisplayNumber.ToString()));
-                break;
-        }
-
-        if (KeySourceControlCombo is { } combo && KeySourceControlOptions.Count > 0) combo.SelectedIndex = 0;
-    }
-
-    /// <summary>Grid edits only land in the bound KeyBindingRowViewModel after this event returns,
-    /// so the rebuild is deferred rather than reading the (still stale) value synchronously here.</summary>
-    private void KeyBindingsGrid_CellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
-    {
-        Dispatcher.BeginInvoke(RebuildProfileKeyBindings, DispatcherPriority.Background);
+        RebuildLayoutPages();
+        RefreshProfileList();
     }
 }

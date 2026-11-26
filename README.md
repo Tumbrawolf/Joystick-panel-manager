@@ -18,15 +18,46 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
 - **Hide/restore** — hide devices or individual controls you don't care about from the views
   without affecting anything already mapped.
 - **Drag-to-reorder** device cards in Live Monitor.
+- **Layout** — load a picture of your controls (a manual's diagram, a photo, your own schematic)
+  and drag a marker for each axis/button/POV onto the matching spot. A hat's four directions and
+  an axis's two ends (+/−) get markers of their own, so each can sit on its own spot and be
+  remapped separately. Markers light up live as the control is used and show what it's mapped
+  to; click one to change what it does (vJoy buttons/axes/hats and keyboard keys, as many at once
+  as you like). Add free text labels for titles and notes. Make as many pages as you like (one per
+  device, or one for a whole HOTAS); the pictures are saved inside the profile. **Export image...**
+  saves a page, markers and all, as a PNG at the background picture's own resolution - a cheat
+  sheet to print or keep on a second screen.
+- **Split controls** — any single hat direction can press a vJoy button or key (diagonals press
+  both neighbouring directions), and either end of an axis can act as a button once it's pushed
+  past a set point - handy for things like a throttle detent or a two-way rocker axis.
+- **Switch behaviours** — a button output can follow the control (hold), give a short press each
+  time it's switched on (pulse), give a short press on every flip on *and* off (for toggle
+  switches when the game only has a single toggle binding), or latch (press once for on, again for
+  off). The same choices apply to hat directions and axis ends.
+- **Shift layer** — pick any button (or hat direction, or axis end) as the shift control; while
+  it's held, every control with a shifted mapping does that instead. Controls without a shifted
+  mapping keep doing their normal thing, so you only set up the extras.
+- **Axis trim from buttons** — a button can nudge a vJoy axis up or down (smoothly while held, or
+  a step per press) or snap it back to center - for trim wheels, zoom, or a throttle on a stick
+  with no lever.
 - **Mapping** — combine multiple physical devices into one or more virtual [vJoy](https://sourceforge.net/projects/vjoystick/)
-  controllers that games bind to, with an "auto-populate" option that maps every control on a
-  device in one click.
-- **Keyboard Mapping** — simulate a keyboard key press from any axis/button/POV, for
-  games/functions that take keyboard input but not joystick input. Off by default every launch;
-  you turn it on explicitly per session.
-- **Profiles** — save/load named setups; the last-used profile reloads automatically on startup.
-  Export/Import a whole profile, or just a single device's renames/calibration/mappings, to/from
-  a `.json` file anywhere - for backup or sharing.
+  controllers that games bind to, and/or have any control press keyboard keys (for games or
+  functions that take keyboard input but not joystick input). Every change goes through one remap
+  window, which you can open from wherever you are: right-click a control on **Live Monitor**,
+  click its marker on the **Layout** tab, or use **Add...** / double-click a line on the
+  **Mappings** tab. The Mappings tab lists everything mapped in plain words, filterable by device,
+  layer and type and sortable by any column. **Map all to vJoy...** on a device's card maps every
+  control on that device in one click.
+- **Keyboard keys** stay off every launch until you tick **Keyboard keys on** at the top of the
+  window (or in the tray icon's menu) - see the safety note below.
+- **Profiles** — named setups that save automatically as you make changes; the last-used profile
+  reloads on startup. The **Profiles** tab lists them all: switch, create, duplicate, rename,
+  delete, and Export/Import to a `.json` file anywhere (for backup or sharing). A single device's
+  renames/calibration/mappings can also be exported/imported from its card in Live Monitor. The
+  dropdown at the bottom of the window switches profile from any tab.
+- **Per-game profiles** — on the Profiles tab, tell ClaudFlight which profile goes with which
+  game; it switches to that profile while the game is running and back to your previous one when
+  the game closes.
 - **Runs in the background** — closing or minimizing the window sends it to the system tray
   instead of exiting, so mapping keeps running while you're in a game.
 
@@ -36,14 +67,14 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
 - [.NET 9 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/9.0) (or build from source
   with the .NET 9 SDK, which bundles everything needed).
 - [vJoy](https://sourceforge.net/projects/vjoystick/) — **only required if you want to use the
-  Mapping tab** to combine devices into a virtual controller. Live Monitor, Calibration, renaming,
-  and Keyboard Mapping all work without it.
+  vJoy mappings** that combine devices into a virtual controller. Live Monitor, Calibration,
+  renaming, the Layout tab and keyboard-key mappings all work without it.
 
 ## Quick start (new to this kind of tool)
 
 1. **Install vJoy** from [sourceforge.net/projects/vjoystick](https://sourceforge.net/projects/vjoystick/)
    if you plan to combine multiple devices into one virtual controller. Skip this if you only want
-   to monitor/calibrate/rename your existing hardware, or only want the Keyboard Mapping tab.
+   to monitor/calibrate/rename your existing hardware, or only want to map controls to keyboard keys.
 2. **Run "Configure vJoy"** (installed alongside the driver, from the Start Menu) once, and set how
    many axes/buttons/POVs vJoy device 1 should have. If unsure, enable all 8 axes and a generous
    button count (e.g. 32) — you can change this later.
@@ -54,13 +85,14 @@ joystick, plus optionally simulate keyboard key presses from any axis/button/POV
 5. Rename devices/controls to something meaningful (click the label to edit it, or right-click a
    control to hide it if you don't need it).
 6. Open **Calibration** and set each axis's center/min/max if the defaults don't feel right.
-7. Open **Mapping**, expand the "What is vJoy?" panel if you want the full explanation, then either
-   add mappings one at a time or use **Auto-populate all controls** to map an entire device onto a
-   vJoy device in one click.
+7. On **Live Monitor**, click **Map all to vJoy...** on a device's card to map every control on it
+   in one go, or right-click any single control and choose **Remap...**. The **Mappings** tab then
+   lists everything (expand its "What is vJoy?" panel for the full explanation).
 8. Open Windows' **"Set up USB game controllers"** (search the Start Menu) to confirm "vJoy Device"
    shows up and responds correctly before jumping into a game.
 9. In your flight sim, bind controls to **vJoy Device** instead of your physical hardware.
-10. Save your profile (bottom of the window) so it reloads automatically next time.
+10. Changes save into the current profile automatically. Use **Duplicate** on the **Profiles** tab
+    to keep a copy under another name.
 
 Closing the window doesn't quit the app — it minimizes to the system tray so your mappings keep
 running. Right-click the tray icon to reopen the window or fully exit.
@@ -72,11 +104,13 @@ dotnet build ClaudFlight.sln
 dotnet run --project src/ClaudFlight.App/ClaudFlight.App.csproj
 ```
 
-Requires the .NET 9 SDK. The solution has two projects:
+Requires the .NET 9 SDK. The solution has three projects:
 
 - `src/ClaudFlight.Core` — device polling (DirectInput/mouse), calibration math, the vJoy and
   keyboard-injection interop, and the mapping engine. No UI dependencies.
 - `src/ClaudFlight.App` — the WPF UI.
+- `tests/ClaudFlight.Tests` — tests for the mapping engine, run against fake devices and a fake
+  vJoy (`dotnet test`), so they need no hardware or driver.
 
 ## How mapping works (for anyone unfamiliar with vJoy)
 
@@ -91,9 +125,9 @@ combined controller instead of four separate ones.
 
 vJoy supports up to 16 virtual devices (numbered 1-16); almost everyone only ever needs device 1.
 
-## Keyboard Mapping safety note
+## Keyboard keys safety note
 
-The Keyboard Mapping tab simulates real keystrokes via Windows' `SendInput` API — the same
+Key mappings simulate real keystrokes via Windows' `SendInput` API — the same
 mechanism legitimate macro tools use. This is why it's **off by default every time the app
 starts** and has to be explicitly re-enabled each session: some anti-cheat software flags
 background keyboard injection, so only turn it on for games/situations where that's acceptable.
@@ -130,7 +164,10 @@ their settings even if moved to a different port.
   screen, right-click the key in Live Monitor and choose **Set image...** (or drop a picture file
   onto it); any common image format works and is fitted onto the key's 64x64 screen. Pictures are
   saved in the profile, travel with a device Export/Import, and are redrawn whenever ClaudFlight
-  connects to the panel. If VSD Craft is running anyway, ClaudFlight stays quiet and just listens
+  connects to the panel. **Set pressed image...** gives a key a second picture shown while it's
+  held. Each panel's card also has two switches: **Show names on keys without a picture** (the
+  key's name and what it's mapped to, updated as you rename or remap) and **Light up keys while
+  pressed** (a bright frame on keys that have no pressed picture of their own). If VSD Craft is running anyway, ClaudFlight stays quiet and just listens
   alongside it (VSD Craft's own pictures stay on the keys), and takes over again - redrawing
   ClaudFlight's pictures - when VSD Craft quits. Which key number sits at which physical position isn't documented,
   so press each key in Live Monitor to see its number and rename it. Other StreamDock models can

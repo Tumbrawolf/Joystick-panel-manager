@@ -29,11 +29,47 @@ public sealed class ProfileStore
             ?? throw new InvalidDataException($"Profile '{name}' could not be parsed.");
     }
 
-    public void Save(Profile profile)
+    public void Save(Profile profile) => SaveSerialized(profile.Name, Serialize(profile));
+
+    /// <summary>The exact JSON Save would write - lets autosave compare against what's on disk
+    /// and skip writing when nothing changed.</summary>
+    public string Serialize(Profile profile) => JsonSerializer.Serialize(profile, JsonOptions);
+
+    public void SaveSerialized(string name, string json) => File.WriteAllText(PathFor(name), json);
+
+    public bool Exists(string name) => File.Exists(PathFor(name));
+
+    /// <summary>"name", or "name 2", "name 3"... - the first that isn't already a saved profile.</summary>
+    public string UniqueName(string name)
     {
-        var json = JsonSerializer.Serialize(profile, JsonOptions);
-        File.WriteAllText(PathFor(profile.Name), json);
+        if (!Exists(name)) return name;
+        var number = 2;
+        while (Exists($"{name} {number}")) number++;
+        return $"{name} {number}";
     }
+
+    /// <summary>Renames a saved profile (its file and the name stored inside it). A change of
+    /// capitals only is fine too - on Windows that's the same file, so it's rewritten in place
+    /// rather than deleted afterward.</summary>
+    public void Rename(string oldName, string newName)
+    {
+        var profile = Load(oldName);
+        profile.Name = newName;
+        var samePath = string.Equals(PathFor(oldName), PathFor(newName), StringComparison.OrdinalIgnoreCase);
+        if (samePath)
+        {
+            // Write under the new spelling: remove the old file first so its name changes too.
+            var json = Serialize(profile);
+            File.Delete(PathFor(oldName));
+            SaveSerialized(newName, json);
+            return;
+        }
+        Save(profile);
+        Delete(oldName);
+    }
+
+    /// <summary>True if both names map to the same profile file (e.g. they differ only in capitals).</summary>
+    public bool IsSameProfile(string a, string b) => string.Equals(PathFor(a), PathFor(b), StringComparison.OrdinalIgnoreCase);
 
     public void Delete(string name)
     {

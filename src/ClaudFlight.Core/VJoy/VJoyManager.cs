@@ -4,7 +4,7 @@ namespace ClaudFlight.Core.VJoy;
 
 /// <summary>Thin, availability-safe wrapper over the vJoy virtual joystick driver.
 /// If the driver isn't installed, IsAvailable is false and all Set* calls are no-ops.</summary>
-public sealed class VJoyManager : IDisposable
+public sealed class VJoyManager : IDisposable, ClaudFlight.Core.Mapping.IVJoyOutput
 {
     public const int AxisMin = 0;
     public const int AxisMax = 32768;
@@ -85,6 +85,7 @@ public sealed class VJoyManager : IDisposable
         VJoyNative.SetBtn(pressed, deviceId, (byte)button);
     }
 
+    /// <param name="povIndex">1-based hat number (1-4).</param>
     /// <param name="direction">0=N,1=E,2=S,3=W discrete direction, or -1 for neutral.</param>
     public void SetDiscretePov(uint deviceId, int povIndex, int direction)
     {

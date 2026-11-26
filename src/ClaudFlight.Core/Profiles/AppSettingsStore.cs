@@ -5,10 +5,20 @@ namespace ClaudFlight.Core.Profiles;
 public sealed class AppSettings
 {
     public string? LastProfileName { get; set; }
+
+    /// <summary>Profiles to switch to automatically while a given game is running.</summary>
+    public List<GameProfileEntry> GameProfiles { get; set; } = [];
 }
 
-/// <summary>Tiny persisted app-level settings (distinct from a Profile) - currently just
-/// "which profile to auto-load next time the app starts".</summary>
+/// <summary>"While ProcessName (e.g. DCS.exe -&gt; "DCS") is running, use ProfileName."</summary>
+public sealed class GameProfileEntry
+{
+    public required string ProcessName { get; set; }
+    public required string ProfileName { get; set; }
+}
+
+/// <summary>Tiny persisted app-level settings (distinct from a Profile): which profile to
+/// auto-load next time the app starts, and which profile goes with which game.</summary>
 public sealed class AppSettingsStore
 {
     private readonly string _path;
