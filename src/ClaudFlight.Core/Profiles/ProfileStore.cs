@@ -22,11 +22,16 @@ public sealed class ProfileStore
     public IEnumerable<string> ListProfileNames() =>
         Directory.EnumerateFiles(ProfilesDirectory, "*.json").Select(f => Path.GetFileNameWithoutExtension(f)!);
 
+    /// <summary>Loads a saved profile. Its name is the one it's listed and saved under, whatever
+    /// the file itself says (a file copied or renamed in Explorer keeps its old name inside), so
+    /// autosave writes back to the same file.</summary>
     public Profile Load(string name)
     {
         var json = File.ReadAllText(PathFor(name));
-        return JsonSerializer.Deserialize<Profile>(json, JsonOptions)
+        var profile = JsonSerializer.Deserialize<Profile>(json, JsonOptions)
             ?? throw new InvalidDataException($"Profile '{name}' could not be parsed.");
+        if (!IsSameProfile(profile.Name ?? "", name)) profile.Name = name;
+        return profile;
     }
 
     public void Save(Profile profile) => SaveSerialized(profile.Name, Serialize(profile));
@@ -58,9 +63,10 @@ public sealed class ProfileStore
         var samePath = string.Equals(PathFor(oldName), PathFor(newName), StringComparison.OrdinalIgnoreCase);
         if (samePath)
         {
-            // Write under the new spelling: remove the old file first so its name changes too.
+            // Rename the file in place to the new spelling, then update the name inside it - the
+            // profile is never missing from disk, even if the write fails.
             var json = Serialize(profile);
-            File.Delete(PathFor(oldName));
+            File.Move(PathFor(oldName), PathFor(newName));
             SaveSerialized(newName, json);
             return;
         }

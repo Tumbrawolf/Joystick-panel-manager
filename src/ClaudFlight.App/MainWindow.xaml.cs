@@ -67,7 +67,10 @@ public partial class MainWindow : Window
             {
                 _currentProfile.RawInputLearnedKeys.Add(new RawInputLearnedKey { DeviceGuid = deviceGuid, VKey = vkey });
             }
-            RefreshDevices();
+            // A hidden device (the regular keyboard, by default) learns every new key typed; a
+            // full refresh then would rebuild every view - and steal focus from whatever text box
+            // is being typed in - for a device nobody's looking at.
+            if (!_currentProfile.ExcludedDeviceGuids.Contains(deviceGuid)) RefreshDevices();
         };
 
         // A StreamDock panel (VSD Craft device) reports this from its background read thread when
@@ -98,11 +101,7 @@ public partial class MainWindow : Window
         // Restore each Raw Input device's learned button set before the first refresh, so its
         // button count/numbering is already correct instead of starting at zero known buttons
         // and waiting for every key to be pressed again this session.
-        foreach (var group in _currentProfile.RawInputLearnedKeys.GroupBy(k => k.DeviceGuid))
-        {
-            _rawInputManager.SeedKnownKeys(group.Key, group.Select(k => k.VKey));
-        }
-        _rawInputManager.SeedAxisModes(_currentProfile.AxisModes);
+        SyncRawInputWithProfile();
 
         _engine.LoadProfile(_currentProfile);
         RefreshDevices();
@@ -348,6 +347,9 @@ public partial class MainWindow : Window
         RebuildCalibrationRows();
         RebuildLayoutMarkers();
         RebuildMappingList();
+
+        // The list was rebuilt, so the "Add back" picker lost its selection; show the first again.
+        if (HiddenDevices.Count > 0) HiddenDevicesCombo.SelectedIndex = 0;
     }
 
     /// <summary>Builds one axis-mode row (see AxisModeRowViewModel) for a Raw Input mouse-style
@@ -953,18 +955,41 @@ public partial class MainWindow : Window
     private void ApplyLoadedProfile(Profile profile)
     {
         _currentProfile = profile;
+        SyncRawInputWithProfile();
         _engine.LoadProfile(_currentProfile);
 
-        foreach (var device in Devices)
-        {
-            device.Label = _currentProfile.DeviceLabels.GetValueOrDefault(device.DeviceGuid, device.DeviceName);
-            ApplyInputLabels(device);
-        }
-
-        RebuildMappingList();
-        RebuildCalibrationRows();
-        ApplyButtonImages();
+        // A full rebuild: the profile decides which devices/controls are hidden, their order,
+        // names, StreamDock options and pictures - not just the labels. RefreshDevices also
+        // rebuilds calibration rows, key pictures, layout markers and the mappings list.
+        RefreshDevices();
         RebuildLayoutPages();
         RefreshProfileList();
+    }
+
+    /// <summary>Makes Raw Input keypads number their buttons the way the current profile does
+    /// (keys it doesn't know yet keep their place after its own), records the full numbering
+    /// back into the profile so it's saved with it, and applies its axis modes.</summary>
+    private void SyncRawInputWithProfile()
+    {
+        foreach (var group in _currentProfile.RawInputLearnedKeys.GroupBy(k => k.DeviceGuid))
+        {
+            var order = group.Select(k => k.VKey).Distinct().ToList();
+            order.AddRange(_rawInputManager.GetKnownVKeys(group.Key).Where(v => !order.Contains(v)));
+            _rawInputManager.SeedKnownKeys(group.Key, order);
+            _rawInputManager.ReorderKnownKeys(group.Key, order);
+        }
+
+        foreach (var deviceGuid in _rawInputManager.DevicesWithKnownKeys)
+        {
+            foreach (var vkey in _rawInputManager.GetKnownVKeys(deviceGuid))
+            {
+                if (!_currentProfile.RawInputLearnedKeys.Any(k => k.DeviceGuid == deviceGuid && k.VKey == vkey))
+                {
+                    _currentProfile.RawInputLearnedKeys.Add(new RawInputLearnedKey { DeviceGuid = deviceGuid, VKey = vkey });
+                }
+            }
+        }
+
+        _rawInputManager.ReplaceAxisModes(_currentProfile.AxisModes);
     }
 }

@@ -41,6 +41,15 @@ public sealed class ProfileStoreTests : IDisposable
     }
 
     [Fact]
+    public void Load_names_the_profile_after_its_file()
+    {
+        _store.Save(new Profile { Name = "Original" });
+        File.Copy(Path.Combine(_store.ProfilesDirectory, "Original.json"), Path.Combine(_store.ProfilesDirectory, "Copied.json"));
+
+        Assert.Equal("Copied", _store.Load("Copied").Name);
+    }
+
+    [Fact]
     public void UniqueName_skips_taken_names()
     {
         _store.Save(new Profile { Name = "Copy" });

@@ -66,9 +66,18 @@ public partial class PickControlWindow : Window
         ControlList.ItemsSource = items;
     }
 
-    /// <summary>Selects whatever's just been pressed, pushed or moved.</summary>
+    /// <summary>Selects whatever's just been pressed, pushed or moved. Controls that showed up
+    /// after the window opened (Live Monitor rebuilds its readings when a device is refreshed) get
+    /// their current reading as a baseline first, so a resting axis isn't mistaken for a move.</summary>
     private void Watch()
     {
+        foreach (var device in _devices)
+        {
+            foreach (var axis in device.Axes) _baseline.TryAdd((device.DeviceGuid, ControlKind.Axis, (int)axis.Axis), axis.Raw);
+            foreach (var button in device.Buttons) _baseline.TryAdd((device.DeviceGuid, ControlKind.Button, button.Index), button.IsPressed ? 1 : 0);
+            foreach (var pov in device.Povs) _baseline.TryAdd((device.DeviceGuid, ControlKind.Pov, pov.Index), pov.RawHundredthDegrees);
+        }
+
         foreach (var device in _devices)
         {
             foreach (var button in device.Buttons)

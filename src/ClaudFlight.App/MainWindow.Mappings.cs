@@ -204,10 +204,15 @@ public partial class MainWindow
     /// mappings are left alone.</summary>
     private void MapAllToVJoy(DeviceMonitorViewModel device, uint vjoyId)
     {
+        // "Mapped" means the whole control already goes to vJoy in the normal layer; a single hat
+        // direction / axis end, a shifted-layer mapping or a nudge doesn't count.
         bool AlreadyMapped(ControlKind kind, int index) => _currentProfile.Bindings.Any(b =>
-            b.Source.DeviceGuid == device.DeviceGuid && b.Source.Kind == kind && b.Source.Index == index && b.Nudge == AxisNudge.None);
+            b.Source.DeviceGuid == device.DeviceGuid && b.Source.Kind == kind && b.Source.Index == index &&
+            b.Part == InputPart.Whole && !b.Shifted && b.Nudge == AxisNudge.None);
 
-        var used = _currentProfile.Bindings.Where(b => b.Target.VJoyDeviceId == vjoyId && b.Nudge == AxisNudge.None).ToList();
+        var used = _currentProfile.Bindings.Where(b => b.Target.VJoyDeviceId == vjoyId).ToList();
+        // Includes axes moved by nudge buttons (trim): those are written every tick and would
+        // override a physical axis mapped onto the same vJoy axis.
         var usedAxes = used.Where(b => b.Target.Kind == ControlKind.Axis).Select(b => (VJoyAxis)b.Target.Index).ToHashSet();
         var usedButtons = used.Where(b => b.Target.Kind == ControlKind.Button).Select(b => b.Target.Index).ToHashSet(); // 0-based
         var usedHats = used.Where(b => b.Target.Kind == ControlKind.Pov).Select(b => b.Target.Index).ToHashSet();

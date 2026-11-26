@@ -75,6 +75,16 @@ public sealed class RawInputKeyboardManager : IDisposable
         foreach (var entry in entries) _axisModes[(entry.DeviceGuid, entry.NativeAxis)] = entry;
     }
 
+    /// <summary>Replaces every axis-mode override with a profile's (on switching profile).</summary>
+    public void ReplaceAxisModes(IEnumerable<AxisModeEntry> entries)
+    {
+        _axisModes.Clear();
+        SeedAxisModes(entries);
+    }
+
+    /// <summary>Keyboard-type devices that have learned keys (their own guids, not combined ones).</summary>
+    public IReadOnlyCollection<Guid> DevicesWithKnownKeys => _knownVKeysByDevice.Keys.ToList();
+
     /// <summary>Sets how one device's native axis should be exposed (see AxisReportMode) - called
     /// when the user changes the selection in Live Monitor. Passing Mode=Axis with ReportAs equal
     /// to nativeAxis clears any relabeling back to default.</summary>
