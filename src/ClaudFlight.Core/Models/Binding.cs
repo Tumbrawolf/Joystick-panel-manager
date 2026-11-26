@@ -97,6 +97,18 @@ public sealed class Profile
     /// exposed (see AxisReportMode) - e.g. relabeling a dial's wheel axis to a different slot, or
     /// turning it into two buttons instead of a continuous axis.</summary>
     public List<AxisModeEntry> AxisModes { get; set; } = [];
+
+    /// <summary>Pictures shown on buttons that have their own screen (StreamDock panel keys).</summary>
+    public List<ButtonImageEntry> ButtonImages { get; set; } = [];
+}
+
+/// <summary>The picture shown on one button's screen: a JPEG already sized for that device's
+/// screens (stored base64-encoded in the profile's JSON).</summary>
+public sealed class ButtonImageEntry
+{
+    public required Guid DeviceGuid { get; init; }
+    public required int ButtonIndex { get; init; }
+    public required byte[] Jpeg { get; init; }
 }
 
 /// <summary>One virtual-key code a specific Raw Input device has been seen to send.</summary>

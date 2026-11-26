@@ -12,6 +12,16 @@
         <ContextMenu x:Key="HideControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
             <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
         </ContextMenu>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
+        <!-- Buttons get their own menu: keys with a screen (StreamDock) can also take a picture. -->
+        <ContextMenu x:Key="ButtonControlMenu" DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+            <MenuItem Header="Set image..." Click="SetButtonImage_Click"
+                      Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
+            <MenuItem Header="Clear image" Click="ClearButtonImage_Click" IsEnabled="{Binding HasImage}"
+                      Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
+            <Separator Visibility="{Binding HasScreen, Converter={StaticResource BoolToVisibility}}" />
+            <MenuItem Header="Hide from Live Monitor" Click="HideControl_Click" />
+        </ContextMenu>
         <Style x:Key="ButtonLampStyle" TargetType="Border">
             <Setter Property="Width" Value="26" />
             <Setter Property="Height" Value="26" />
@@ -142,10 +152,22 @@
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate DataType="{x:Type vm:ButtonReadingViewModel}">
-                                                    <StackPanel Margin="2" Width="58" ContextMenu="{StaticResource HideControlMenu}"
+                                                    <StackPanel Margin="2" Width="58" ContextMenu="{StaticResource ButtonControlMenu}"
                                                                 AllowDrop="True" Drop="ButtonLamp_Drop"
                                                                 PreviewMouseLeftButtonDown="ButtonLamp_PreviewMouseLeftButtonDown"
                                                                 MouseMove="ButtonLamp_MouseMove">
+                                                        <Image Source="{Binding Image}" Width="40" Height="40" Margin="0,0,0,1"
+                                                               ToolTip="The picture on this key's screen. Right-click to change or clear it, or drop a picture file here.">
+                                                            <Image.Style>
+                                                                <Style TargetType="Image">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Image}" Value="{x:Null}">
+                                                                            <Setter Property="Visibility" Value="Collapsed" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Image.Style>
+                                                        </Image>
                                                         <Border Style="{StaticResource ButtonLampStyle}" HorizontalAlignment="Center"
                                                                 ToolTip="This is the number to type into Mapping's Source #/Target # field for this button. On a Raw Input keyboard device, drag to reorder.">
                                                             <TextBlock Text="{Binding DisplayNumber}" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="10" />

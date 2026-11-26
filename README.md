@@ -109,6 +109,8 @@ Profile files are plain JSON and safe to inspect, back up, or hand-edit if you k
 doing — joysticks/game controllers are identified by their DirectInput instance GUID, and
 keyboard-/mouse-type devices (including the system mouse) by a GUID derived from their stable Raw
 Input device path. Both are generally stable for the same physical device on the same USB port.
+StreamDock panels are identified by a GUID derived from their USB serial number, so they keep
+their settings even if moved to a different port.
 
 ## Known limitations
 
@@ -119,12 +121,24 @@ Input device path. Both are generally stable for the same physical device on the
   seen (restore them from the Hidden Devices list in Live Monitor), and a keypad's buttons are
   *learned* as they're pressed rather than assumed from a fixed catalog, so press each button once
   before mapping it.
-- Some programmable panels (streaming decks with their own configuration app, e.g. "VSD Craft"
-  style devices) don't emit any raw button-press signal at all until configured in their own
-  software, and route button presses through a proprietary USB protocol rather than standard
-  keyboard/mouse HID reports — ClaudFlight can't capture those directly. If the panel's own
-  software offers a "Hotkey" action, assigning one to each button (with the panel's software
-  running in the background) lets ClaudFlight pick up the resulting keystroke instead.
+- **StreamDock panels** (Mirabox/HotSpot devices configured with "VSD Craft", currently the
+  **VSD M18**) use a proprietary USB protocol instead of keyboard/joystick reports. ClaudFlight
+  reads that protocol directly, so the M18's 15 screen keys and 3 side buttons show up as regular
+  buttons ("Key 1"-"Key 15", "Side 1"-"Side 3") that can be renamed, mapped to vJoy, or bound
+  to a keystroke. **VSD Craft isn't needed**: ClaudFlight sends the panel the same start-up
+  sequence VSD Craft does, which switches its key reporting on. To put a picture on a key's
+  screen, right-click the key in Live Monitor and choose **Set image...** (or drop a picture file
+  onto it); any common image format works and is fitted onto the key's 64x64 screen. Pictures are
+  saved in the profile, travel with a device Export/Import, and are redrawn whenever ClaudFlight
+  connects to the panel. If VSD Craft is running anyway, ClaudFlight stays quiet and just listens
+  alongside it (VSD Craft's own pictures stay on the keys), and takes over again - redrawing
+  ClaudFlight's pictures - when VSD Craft quits. Which key number sits at which physical position isn't documented,
+  so press each key in Live Monitor to see its number and rename it. Other StreamDock models can
+  be added to the `SupportedDevices` list in `StreamDockManager` once their USB IDs are known.
+- Other programmable panels with their own proprietary protocol can't be captured directly. If
+  the panel's own software offers a "Hotkey" action, assigning one to each button (with the
+  panel's software running in the background) lets ClaudFlight pick up the resulting keystroke
+  instead.
 - A gaming mouse's extra/macro buttons are often routed through the vendor's own proprietary
   software rather than standard mouse or keyboard input, and won't be seen unless the vendor
   software is configured to send them as one of those.
