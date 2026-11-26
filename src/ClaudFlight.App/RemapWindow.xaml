@@ -18,6 +18,11 @@
             <RadioButton x:Name="ShiftLayerRadio" Content="Shifted (while shift is held)" Checked="Layer_Checked" />
         </StackPanel>
         <TextBlock x:Name="ShiftHintText" TextWrapping="Wrap" FontSize="11" Foreground="#885500" Margin="110,0,0,6" />
+        <DockPanel x:Name="ModeLayerRow" Margin="0,0,0,6">
+            <TextBlock Text="Mode:" Width="110" VerticalAlignment="Center" />
+            <ComboBox x:Name="ModeLayerCombo" DisplayMemberPath="Display" SelectionChanged="ModeLayerCombo_SelectionChanged"
+                      ToolTip="Which mode these mappings belong to. In a mode, an input with mappings for that mode uses them instead of its any-mode ones. Set up modes with Modes... on the Mappings tab." />
+        </DockPanel>
 
         <GroupBox x:Name="OutputsGroup" Header="Currently does" Padding="6">
             <StackPanel>
@@ -29,7 +34,10 @@
                                 <Button DockPanel.Dock="Right" Content="Remove" Click="RemoveOutput_Click" Padding="6,0" />
                                 <Button DockPanel.Dock="Right" Content="Change" Click="EditOutput_Click" Padding="6,0" Margin="0,0,4,0"
                                         ToolTip="Load this into the form below to change it" />
-                                <TextBlock Text="{Binding Description}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Description}" TextWrapping="Wrap" />
+                                    <TextBlock Text="{Binding Warning}" TextWrapping="Wrap" FontSize="11" Foreground="#B04000" Visibility="{Binding WarningVisibility}" />
+                                </StackPanel>
                             </DockPanel>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
@@ -43,6 +51,29 @@
                     <TextBlock Text="Send:" Width="110" VerticalAlignment="Center" />
                     <ComboBox x:Name="OutputTypeCombo" DisplayMemberPath="Display" SelectionChanged="OutputTypeCombo_SelectionChanged" />
                 </DockPanel>
+                <DockPanel x:Name="TriggerRow" Margin="0,2">
+                    <TextBlock Text="When:" Width="110" VerticalAlignment="Center" />
+                    <ComboBox x:Name="TriggerCombo" DisplayMemberPath="Display"
+                              ToolTip="Which kind of press sets this off - so one button can do different things when tapped, held or double-tapped. A short press waits until you let go, so it can share a button with a long press." />
+                </DockPanel>
+                <StackPanel x:Name="ZoneRow" Margin="0,2">
+                    <DockPanel>
+                        <TextBlock Text="Zone:" Width="110" VerticalAlignment="Center" />
+                        <TextBox x:Name="ZoneFromBox" Text="90" Width="44" AutomationProperties.Name="Zone from percent"
+                                 ToolTip="Where the zone starts, as a percentage of the axis's travel (0 = one end, 100 = the other)." />
+                        <TextBlock Text="% to" VerticalAlignment="Center" Margin="4,0" />
+                        <TextBox x:Name="ZoneToBox" Text="100" Width="44" AutomationProperties.Name="Zone to percent"
+                                 ToolTip="Where the zone ends, as a percentage of the axis's travel." />
+                        <TextBlock Text="%" VerticalAlignment="Center" Margin="4,0,0,0" />
+                    </DockPanel>
+                    <StackPanel Orientation="Horizontal" Margin="110,3,0,0">
+                        <TextBlock x:Name="ZoneLiveText" VerticalAlignment="Center" Width="130" FontSize="11" Foreground="#444444" />
+                        <Button Content="Start here" Click="ZoneFromHere_Click" Padding="6,0" FontSize="11" Margin="0,0,4,0"
+                                ToolTip="Move the axis to where the zone should start, then click this." />
+                        <Button Content="End here" Click="ZoneToHere_Click" Padding="6,0" FontSize="11"
+                                ToolTip="Move the axis to where the zone should end, then click this." />
+                    </StackPanel>
+                </StackPanel>
                 <DockPanel x:Name="NudgeRow" Margin="0,2">
                     <TextBlock Text="Move it:" Width="110" VerticalAlignment="Center" />
                     <ComboBox x:Name="NudgeCombo" DisplayMemberPath="Display" SelectionChanged="NudgeCombo_SelectionChanged" />
@@ -54,16 +85,37 @@
                 </DockPanel>
                 <DockPanel x:Name="TargetRow" Margin="0,2">
                     <TextBlock x:Name="TargetLabel" Text="Button:" Width="110" VerticalAlignment="Center" />
-                    <ComboBox x:Name="TargetCombo" DisplayMemberPath="Display" MaxDropDownHeight="300" />
+                    <ComboBox x:Name="TargetCombo" DisplayMemberPath="Display" MaxDropDownHeight="300" SelectionChanged="TargetCombo_SelectionChanged" />
                 </DockPanel>
                 <TextBlock x:Name="VJoyLimitText" TextWrapping="Wrap" FontSize="11" Foreground="#885500" Margin="110,0,0,2" />
+                <StackPanel x:Name="SequenceRow" Margin="0,2">
+                    <DockPanel>
+                        <TextBlock Text="Keys:" Width="110" VerticalAlignment="Center" />
+                        <TextBox x:Name="SequenceBox" AutomationProperties.Name="Key sequence"
+                                 ToolTip="Keys pressed one after another, separated by commas. Join keys pressed together with + and pause with wait and a number of milliseconds." />
+                    </DockPanel>
+                    <TextBlock TextWrapping="Wrap" FontSize="11" Foreground="#444444" Margin="110,2,0,0"
+                               Text="E.g. &quot;G, wait 200, Ctrl+L, Enter&quot;. Played once each time it's pressed. Pick a key below and click Insert to add it." />
+                </StackPanel>
                 <DockPanel x:Name="KeyRow" Margin="0,2">
                     <TextBlock Text="Key:" Width="110" VerticalAlignment="Center" />
-                    <ComboBox x:Name="KeyCombo" DisplayMemberPath="Name" MaxDropDownHeight="300" />
+                    <Button x:Name="InsertKeyButton" DockPanel.Dock="Right" Content="Insert" Click="InsertKey_Click" Padding="8,0" Margin="4,0,0,0"
+                            ToolTip="Add the chosen key to the end of the sequence." />
+                    <ComboBox x:Name="KeyCombo" DisplayMemberPath="Name" MaxDropDownHeight="300" SelectionChanged="KeyCombo_SelectionChanged" />
                 </DockPanel>
+                <TextBlock x:Name="ClashText" TextWrapping="Wrap" FontSize="11" Foreground="#B04000" Margin="110,0,0,2" Visibility="Collapsed" />
                 <DockPanel x:Name="ModeRow" Margin="0,2">
                     <TextBlock Text="Behaviour:" Width="110" VerticalAlignment="Center" />
                     <ComboBox x:Name="ModeCombo" DisplayMemberPath="Display" SelectionChanged="ModeCombo_SelectionChanged" />
+                </DockPanel>
+                <DockPanel x:Name="SayRow" Margin="0,2">
+                    <TextBlock Text="Say:" Width="110" VerticalAlignment="Center" />
+                    <TextBlock Text="on" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <TextBox x:Name="SayOnBox" Width="120" AutomationProperties.Name="Say when latched on"
+                             ToolTip="Spoken when the latch turns on, e.g. Gear down. Leave empty for silence." />
+                    <TextBlock Text="off" VerticalAlignment="Center" Margin="8,0,4,0" />
+                    <TextBox x:Name="SayOffBox" Width="120" HorizontalAlignment="Left" AutomationProperties.Name="Say when latched off"
+                             ToolTip="Spoken when the latch turns off, e.g. Gear up. Leave empty for silence." />
                 </DockPanel>
                 <DockPanel x:Name="NudgeAmountRow" Margin="0,2">
                     <TextBlock Text="Amount:" Width="110" VerticalAlignment="Center" />
@@ -77,8 +129,11 @@
                 </DockPanel>
                 <StackPanel Orientation="Horizontal" Margin="110,6,0,0">
                     <Button x:Name="AddButton" Content="Add" Click="Add_Click" Padding="14,2" />
+                    <Button x:Name="TestButton" Content="Test" Click="Test_Click" Padding="14,2" Margin="6,0,0,0"
+                            ToolTip="Send what the form describes once, without touching the hardware: vJoy outputs straight away, keys after a few seconds so you can switch to the game first." />
                     <Button x:Name="CancelEditButton" Content="Cancel" Click="CancelEdit_Click" Padding="14,2" Margin="6,0,0,0" Visibility="Collapsed" />
                 </StackPanel>
+                <TextBlock x:Name="TestResultText" TextWrapping="Wrap" FontSize="11" Foreground="#2E7D32" Margin="110,4,0,0" />
             </StackPanel>
         </GroupBox>
 

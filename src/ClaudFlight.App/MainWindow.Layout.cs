@@ -69,6 +69,7 @@ public partial class MainWindow
         LayoutDeletePageButton.IsEnabled = hasPage;
         LayoutAddTextButton.IsEnabled = hasPage;
         LayoutExportImageButton.IsEnabled = hasPage;
+        LayoutPrintButton.IsEnabled = hasPage;
         LayoutClearBackgroundButton.IsEnabled = _layoutPage?.Background is not null;
 
         if (_layoutPage is { } page)
@@ -79,7 +80,11 @@ public partial class MainWindow
                 var deviceLabel = DeviceName(marker.DeviceGuid);
                 var savedLabel = SavedControlName(marker.DeviceGuid, marker.Kind, marker.Index);
                 var mapping = DescribeMarkerMappings(marker);
-                LayoutItems.Add(new LayoutMarkerViewModel(marker, reading, savedLabel, deviceLabel, mapping) { IsEditing = _isLayoutEditing });
+                LayoutItems.Add(new LayoutMarkerViewModel(marker, reading, savedLabel, deviceLabel, mapping)
+                {
+                    IsEditing = _isLayoutEditing,
+                    IsZoneActive = marker.Part == InputPart.Zone ? ZoneCheck(marker.DeviceGuid, marker.Index) : null,
+                });
             }
 
             foreach (var text in page.Texts)
@@ -144,14 +149,14 @@ public partial class MainWindow
         foreach (var binding in _currentProfile.Bindings)
         {
             if (binding.Source.DeviceGuid != deviceGuid || binding.Source.Kind != kind || binding.Source.Index != index || binding.Part != part) continue;
-            outputs.Add(new RemapOutput(DescribeBinding(binding), binding, binding.Shifted));
+            outputs.Add(new RemapOutput(DescribeBinding(binding), binding, binding.Shifted, binding.ModeName, ConflictNote(binding)));
         }
 
         foreach (var keyBinding in _currentProfile.KeyBindings)
         {
             if (keyBinding.Source.DeviceGuid != deviceGuid || keyBinding.Source.Kind != kind || keyBinding.Source.Index != index) continue;
             if (InputParts.Of(keyBinding) != part) continue;
-            outputs.Add(new RemapOutput(DescribeKeyBinding(keyBinding), keyBinding, keyBinding.Shifted));
+            outputs.Add(new RemapOutput(DescribeKeyBinding(keyBinding), keyBinding, keyBinding.Shifted, keyBinding.ModeName, ConflictNote(keyBinding)));
         }
 
         return outputs;
@@ -159,7 +164,17 @@ public partial class MainWindow
 
     /// <summary>Short description of a vJoy mapping, e.g. "vJoy 1 B5 (latch)" or "vJoy 1 Slider0 ▲ 50%/s".
     /// Button/hat numbers use the same 1-based numbering Live Monitor shows.</summary>
-    internal static string DescribeBinding(Binding binding)
+    internal static string DescribeBinding(Binding binding) =>
+        WithTriggerAndZone(DescribeBindingOutput(binding), binding.Trigger, binding.Part == InputPart.Zone, binding.ZoneFrom, binding.ZoneTo);
+
+    /// <summary>"90-100%: " in front for a zone, ", long press" after for a special trigger.</summary>
+    private static string WithTriggerAndZone(string text, PressTrigger trigger, bool isZone, double zoneFrom, double zoneTo)
+    {
+        if (TriggerName(trigger) is { Length: > 0 } name) text += $", {name}";
+        return isZone ? $"{Math.Min(zoneFrom, zoneTo) * 100:0}-{Math.Max(zoneFrom, zoneTo) * 100:0}%: {text}" : text;
+    }
+
+    private static string DescribeBindingOutput(Binding binding)
     {
         var target = binding.Target;
         if (binding.Nudge != AxisNudge.None)
@@ -169,6 +184,7 @@ public partial class MainWindow
             return binding.Nudge switch
             {
                 AxisNudge.Center => $"{axis} to center",
+                AxisNudge.SetTo => $"{axis} to {percent}",
                 _ => $"{axis} {(binding.Nudge == AxisNudge.Increase ? "▲" : "▼")} {percent}{(binding.Mode == SwitchMode.Hold ? "/s" : " per press")}",
             };
         }
@@ -185,20 +201,58 @@ public partial class MainWindow
             {
                 SwitchMode.PulseOnPress => " (pulse)",
                 SwitchMode.PulseOnBoth => " (pulse on/off)",
-                SwitchMode.Latch => " (latch)",
+                SwitchMode.Latch => binding.SayOn is not null || binding.SayOff is not null ? " (latch, spoken)" : " (latch)",
                 _ => "",
             };
         }
         return text;
     }
 
+    /// <summary>"" for a normal press, else "long press" etc.</summary>
+    internal static string TriggerName(PressTrigger trigger) => trigger switch
+    {
+        PressTrigger.ShortPress => "short press",
+        PressTrigger.LongPress => "long press",
+        PressTrigger.DoubleTap => "double tap",
+        _ => "",
+    };
+
+    /// <summary>"zone 90-100%".</summary>
+    internal static string ZoneText(double from, double to) =>
+        $"zone {Math.Min(from, to) * 100:0}-{Math.Max(from, to) * 100:0}%";
+
     internal static string DescribeKeyBinding(ClaudFlight.Core.Models.KeyBinding keyBinding)
     {
-        var name = KeyCatalog.Keys.FirstOrDefault(k => k.VKey == keyBinding.VirtualKeyCode)?.Name ?? $"0x{keyBinding.VirtualKeyCode:X2}";
-        var text = $"Key {name}";
-        if (keyBinding.Source.Kind != ControlKind.Axis && !keyBinding.HoldWhilePressed) text += keyBinding.TapOnRelease ? " (tap on/off)" : " (tap)";
-        return text;
+        string text;
+        if (keyBinding.Sequence is { Count: > 0 } sequence)
+        {
+            text = $"Keys {KeySequenceText.Format(sequence)}";
+        }
+        else
+        {
+            var name = KeyCatalog.Keys.FirstOrDefault(k => k.VKey == keyBinding.VirtualKeyCode)?.Name ?? $"0x{keyBinding.VirtualKeyCode:X2}";
+            text = $"Key {name}";
+            if (keyBinding.Source.Kind != ControlKind.Axis && !keyBinding.HoldWhilePressed) text += keyBinding.TapOnRelease ? " (tap on/off)" : " (tap)";
+        }
+        return WithTriggerAndZone(text, keyBinding.Trigger, keyBinding.IsZone, keyBinding.ZoneFrom, keyBinding.ZoneTo);
     }
+
+    /// <summary>Whether an axis is inside any of its zone mappings (either layer) right now. The
+    /// zones are read once; markers are rebuilt whenever mappings change.</summary>
+    private Func<bool> ZoneCheck(Guid deviceGuid, int axisIndex)
+    {
+        var zones = _currentProfile.Bindings
+            .Where(b => b.Part == InputPart.Zone && b.Source.DeviceGuid == deviceGuid && b.Source.Kind == ControlKind.Axis && b.Source.Index == axisIndex)
+            .Select(b => (b.ZoneFrom, b.ZoneTo))
+            .Concat(_currentProfile.KeyBindings
+                .Where(k => k.IsZone && k.Source.DeviceGuid == deviceGuid && k.Source.Kind == ControlKind.Axis && k.Source.Index == axisIndex)
+                .Select(k => (k.ZoneFrom, k.ZoneTo)))
+            .ToList();
+        return () => AxisTravel(deviceGuid, axisIndex) is { } position && zones.Any(z => InputParts.InZone(position, z.ZoneFrom, z.ZoneTo));
+    }
+
+    /// <summary>Where an axis is along its travel right now (0..1, calibrated), or null if it isn't connected.</summary>
+    internal double? AxisTravel(Guid deviceGuid, int axisIndex) => _engine.AxisTravel(deviceGuid, (AxisType)axisIndex);
 
     internal bool IsVJoyTargetUsed(uint vjoyDeviceId, ControlKind kind, int index) =>
         _currentProfile.Bindings.Any(b => b.Target.VJoyDeviceId == vjoyDeviceId && b.Target.Kind == kind && b.Target.Index == index);
@@ -234,13 +288,17 @@ public partial class MainWindow
     private string DescribeMappings(Guid deviceGuid, ControlKind kind, int index, InputPart part)
     {
         var remaps = GetRemaps(deviceGuid, kind, index, part);
-        var parts = remaps.Where(r => !r.Shifted).Select(r => r.Description)
-            .Concat(remaps.Where(r => r.Shifted).Select(r => "⇧ " + r.Description))
+        // Any-mode mappings first, then each mode's (named in front).
+        var parts = remaps.OrderBy(r => r.ModeName is not null).ThenBy(r => r.ModeName, StringComparer.OrdinalIgnoreCase)
+            .Where(r => !r.Shifted).Select(r => ModePrefix(r) + r.Description)
+            .Concat(remaps.Where(r => r.Shifted).Select(r => "⇧ " + ModePrefix(r) + r.Description))
             .ToList();
         var slot = new RemapSlot(deviceGuid, kind, index, part, "", "");
         if (IsShiftControl(slot)) parts.Insert(0, "SHIFT");
         return string.Join(", ", parts);
     }
+
+    private static string ModePrefix(RemapOutput remap) => remap.ModeName is null ? "" : $"{remap.ModeName}: ";
 
     internal void AddRemap(object output)
     {
@@ -281,9 +339,11 @@ public partial class MainWindow
     /// Mappings list, and the markers' mapping text.</summary>
     private void AfterRemapsChanged()
     {
+        RefreshConflicts();
         _engine.LoadProfile(_currentProfile);
         RebuildLayoutMarkers();
         RebuildMappingList();
+        _outputBuiltFor = null; // the vJoy Output tab rebuilds next time it's shown
     }
 
     private void OpenRemapEditor(LayoutMarkerViewModel marker)
@@ -339,6 +399,7 @@ public partial class MainWindow
         if (!ReferenceEquals(e.OriginalSource, MainTabs)) return;
         if (ReferenceEquals(MainTabs.SelectedItem, LayoutTab)) RebuildLayoutMarkers();
         else if (ReferenceEquals(MainTabs.SelectedItem, MappingsTab)) RebuildMappingList();
+        else if (ReferenceEquals(MainTabs.SelectedItem, OutputTab)) RebuildOutputView();
         else if (ReferenceEquals(MainTabs.SelectedItem, ProfilesTab))
         {
             RefreshProfileList();
@@ -435,6 +496,58 @@ public partial class MainWindow
         };
         if (dialog.ShowDialog(this) != true) return;
 
+        try
+        {
+            if (RenderLayoutPage() is not { } picture) return;
+            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(picture));
+            using var file = File.Create(dialog.FileName);
+            encoder.Save(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, $"Couldn't save the picture:\n{ex.Message}", "Export image", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>Prints the page as a reference card, turned and scaled to fit the paper. Picking
+    /// "Microsoft Print to PDF" saves it as a PDF instead.</summary>
+    private void LayoutPrint_Click(object sender, RoutedEventArgs e)
+    {
+        if (_layoutPage is null) return;
+        var dialog = new PrintDialog();
+        if (dialog.ShowDialog() != true) return;
+        try
+        {
+            if (RenderLayoutPage() is not { } picture) return;
+            const double margin = 36; // half an inch
+            var pageWidth = dialog.PrintableAreaWidth;
+            var pageHeight = dialog.PrintableAreaHeight;
+            var (width, height) = (picture.Width, picture.Height);
+            var turn = width > height != pageWidth > pageHeight; // a wide picture on upright paper goes sideways
+            var (fitWidth, fitHeight) = turn ? (height, width) : (width, height);
+            var scale = Math.Min((pageWidth - 2 * margin) / fitWidth, (pageHeight - 2 * margin) / fitHeight);
+
+            var visual = new DrawingVisual();
+            using (var context = visual.RenderOpen())
+            {
+                context.PushTransform(new TranslateTransform(pageWidth / 2, pageHeight / 2));
+                if (turn) context.PushTransform(new RotateTransform(90));
+                context.PushTransform(new ScaleTransform(scale, scale));
+                context.DrawImage(picture, new Rect(-width / 2, -height / 2, width, height));
+            }
+            dialog.PrintVisual(visual, $"ClaudFlight - {_layoutPage.Name}");
+        }
+        catch (Exception ex) when (ex is System.Printing.PrintSystemException or InvalidOperationException)
+        {
+            MessageBox.Show(this, $"Couldn't print the page:\n{ex.Message}", "Print", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>The current page as it looks locked (picture, markers, mappings and text, no hint),
+    /// cropped to the picture plus the padding around it, or null if there's nothing to draw.</summary>
+    private System.Windows.Media.Imaging.BitmapSource? RenderLayoutPage()
+    {
         // Show the locked look (plain text labels, no hint) while rendering.
         foreach (var item in LayoutItems) item.IsEditing = false;
         var hintVisibility = LayoutHintText.Visibility;
@@ -445,7 +558,7 @@ public partial class MainWindow
         try
         {
             var picture = LayoutPictureRect();
-            if (picture.IsEmpty) return;
+            if (picture.IsEmpty) return null;
             var area = new Rect(0, 0, LayoutArea.ActualWidth, LayoutArea.ActualHeight);
             // Keep the padding around the picture so markers sitting on its edge aren't cut in half.
             var crop = Rect.Intersect(new Rect(picture.X - LayoutPadding, picture.Y - LayoutPadding,
@@ -470,14 +583,9 @@ public partial class MainWindow
             var pixels = new Int32Rect((int)(crop.X * scale), (int)(crop.Y * scale),
                 Math.Min((int)(crop.Width * scale), full.PixelWidth - (int)(crop.X * scale)),
                 Math.Min((int)(crop.Height * scale), full.PixelHeight - (int)(crop.Y * scale)));
-            var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
-            encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(new System.Windows.Media.Imaging.CroppedBitmap(full, pixels)));
-            using var file = File.Create(dialog.FileName);
-            encoder.Save(file);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            MessageBox.Show(this, $"Couldn't save the picture:\n{ex.Message}", "Export image", MessageBoxButton.OK, MessageBoxImage.Error);
+            var cropped = new System.Windows.Media.Imaging.CroppedBitmap(full, pixels);
+            cropped.Freeze();
+            return cropped;
         }
         finally
         {

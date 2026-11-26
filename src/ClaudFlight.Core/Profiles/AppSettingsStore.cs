@@ -15,6 +15,9 @@ public sealed class GameProfileEntry
 {
     public required string ProcessName { get; set; }
     public required string ProfileName { get; set; }
+
+    /// <summary>Turn keyboard keys on while the game runs (and off again when it closes).</summary>
+    public bool KeyboardKeysOn { get; set; }
 }
 
 /// <summary>Tiny persisted app-level settings (distinct from a Profile): which profile to

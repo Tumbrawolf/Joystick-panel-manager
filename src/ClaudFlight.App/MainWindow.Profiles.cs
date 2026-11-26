@@ -23,6 +23,12 @@ public sealed record GameEntryRow(GameProfileEntry Entry, string ProfileText, bo
 {
     /// <summary>What a screen reader says for the row.</summary>
     public override string ToString() => $"{Entry.ProcessName} uses {ProfileText}";
+
+    // Each rebuilt row is a new row: were it "equal" to the one it replaces, the accessibility tree
+    // would keep the old row's entry, pointing a screen reader at its discarded Remove button and
+    // checkbox.
+    public bool Equals(GameEntryRow? other) => ReferenceEquals(this, other);
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
 }
 
 /// <summary>The Profiles tab: every saved profile (switch, new, duplicate, rename, delete,
@@ -202,7 +208,7 @@ public partial class MainWindow
         if (SelectedProfileName is not { } name || _profileStore.IsSameProfile(name, _currentProfile.Name)) return;
 
         var games = _settings.GameProfiles.Where(g => _profileStore.IsSameProfile(g.ProfileName, name)).ToList();
-        var message = $"Delete profile '{name}'? This can't be undone (Export it first if you might want it back).";
+        var message = $"Delete profile '{name}' and its backups? This can't be undone (Export it first if you might want it back).";
         if (games.Count > 0) message += $"\n\nIt's also removed from the games that use it: {string.Join(", ", games.Select(g => g.ProcessName))}.";
         if (MessageBox.Show(this, message, "Delete profile", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
@@ -365,11 +371,21 @@ public partial class MainWindow
         }
 
         _settings.GameProfiles.RemoveAll(entry => string.Equals(entry.ProcessName, name, StringComparison.OrdinalIgnoreCase));
-        _settings.GameProfiles.Add(new GameProfileEntry { ProcessName = name, ProfileName = profile });
+        _settings.GameProfiles.Add(new GameProfileEntry { ProcessName = name, ProfileName = profile, KeyboardKeysOn = GameKeysCheck.IsChecked == true });
+        GameKeysCheck.IsChecked = false;
         GameProcessCombo.Text = "";
         RememberCurrentProfile(); // saves the settings
         RefreshProfileList();
         CheckGameProfiles();
+    }
+
+    /// <summary>A game's "Keys on" box: saved, and applied straight away if that game is running.</summary>
+    private void GameKeys_Changed(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox { IsLoaded: true, DataContext: GameEntryRow row } box) return;
+        row.Entry.KeyboardKeysOn = box.IsChecked == true;
+        RememberCurrentProfile(); // saves the settings
+        if (_activeGameProcess is { } game && string.Equals(game, row.Entry.ProcessName, StringComparison.OrdinalIgnoreCase)) ApplyGameKeys(row.Entry);
     }
 
     private void RemoveGameProfile_Click(object sender, RoutedEventArgs e)

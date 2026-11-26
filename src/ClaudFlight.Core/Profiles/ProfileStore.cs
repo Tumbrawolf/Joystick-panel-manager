@@ -1,7 +1,14 @@
+using System.Globalization;
 using System.Text.Json;
 using ClaudFlight.Core.Models;
 
 namespace ClaudFlight.Core.Profiles;
+
+/// <summary>One saved copy of a profile as it was at Time.</summary>
+public sealed record ProfileBackup(string Path, DateTime Time, long Bytes)
+{
+    public override string ToString() => $"{Time:ddd d MMM yyyy, HH:mm}  ({Math.Max(1, Bytes / 1024)} KB)";
+}
 
 public sealed class ProfileStore
 {
@@ -40,6 +47,10 @@ public sealed class ProfileStore
     /// and skip writing when nothing changed.</summary>
     public string Serialize(Profile profile) => JsonSerializer.Serialize(profile, JsonOptions);
 
+    /// <summary>A profile from JSON Serialize wrote (e.g. an earlier version kept for undo).</summary>
+    public Profile Deserialize(string json) =>
+        JsonSerializer.Deserialize<Profile>(json, JsonOptions) ?? throw new InvalidDataException("The profile could not be parsed.");
+
     public void SaveSerialized(string name, string json) => File.WriteAllText(PathFor(name), json);
 
     public bool Exists(string name) => File.Exists(PathFor(name));
@@ -71,16 +82,91 @@ public sealed class ProfileStore
             return;
         }
         Save(profile);
-        Delete(oldName);
+        File.Delete(PathFor(oldName)); // just the file - Delete would take the backups with it
+
+        // Its backups go with it (merged in, should the new name have a folder already).
+        var oldBackups = BackupFolderFor(oldName);
+        var newBackups = BackupFolderFor(newName);
+        if (!Directory.Exists(oldBackups) || string.Equals(oldBackups, newBackups, StringComparison.OrdinalIgnoreCase)) return;
+        if (!Directory.Exists(newBackups))
+        {
+            Directory.Move(oldBackups, newBackups);
+            return;
+        }
+        foreach (var file in Directory.EnumerateFiles(oldBackups, "*.json"))
+        {
+            var target = Path.Combine(newBackups, Path.GetFileName(file));
+            if (!File.Exists(target)) File.Move(file, target);
+        }
+        Directory.Delete(oldBackups, recursive: true);
     }
+
+    // ---- Backups: earlier versions of each profile, kept in Backups\<name>\ ----
+
+    private const string BackupTimeFormat = "yyyy-MM-dd HH-mm-ss";
+
+    public string BackupsDirectory => Path.Combine(ProfilesDirectory, "Backups");
+
+    /// <summary>Copies the profile's file as it is now into its backups, unless the newest backup is
+    /// less than minimumGap old (so steady autosaving doesn't fill the folder with near-copies), then
+    /// drops the oldest beyond keep. Returns true if it made one.</summary>
+    public bool BackUpIfDue(string name, TimeSpan minimumGap, int keep = 30, DateTime? now = null)
+    {
+        var source = PathFor(name);
+        if (!File.Exists(source)) return false;
+        var time = now ?? DateTime.Now;
+        var existing = ListBackups(name);
+        // A newest backup "in the future" means the clock went back (e.g. daylight saving ended):
+        // don't wait for real time to catch up with it.
+        if (existing.Count > 0 && time >= existing[0].Time && time - existing[0].Time < minimumGap) return false;
+
+        var folder = BackupFolderFor(name);
+        Directory.CreateDirectory(folder);
+        File.Copy(source, Path.Combine(folder, time.ToString(BackupTimeFormat, CultureInfo.InvariantCulture) + ".json"), overwrite: true);
+        foreach (var old in ListBackups(name).Skip(keep)) File.Delete(old.Path);
+        return true;
+    }
+
+    /// <summary>A profile's backups, newest first.</summary>
+    public IReadOnlyList<ProfileBackup> ListBackups(string name)
+    {
+        var folder = BackupFolderFor(name);
+        if (!Directory.Exists(folder)) return [];
+        var backups = new List<ProfileBackup>();
+        foreach (var file in Directory.EnumerateFiles(folder, "*.json"))
+        {
+            if (DateTime.TryParseExact(Path.GetFileNameWithoutExtension(file), BackupTimeFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
+            {
+                backups.Add(new ProfileBackup(file, time, new FileInfo(file).Length));
+            }
+        }
+        return backups.OrderByDescending(b => b.Time).ToList();
+    }
+
+    /// <summary>Puts a backup back as the named profile's saved file - after backing up what's
+    /// there now, so restoring can itself be undone from the list.</summary>
+    public Profile RestoreBackup(string name, ProfileBackup backup)
+    {
+        var profile = LoadFromFile(backup.Path);
+        profile.Name = name;
+        BackUpIfDue(name, TimeSpan.Zero);
+        Save(profile);
+        return profile;
+    }
+
+    private string BackupFolderFor(string name) => Path.Combine(BackupsDirectory, SanitizeFileName(name));
 
     /// <summary>True if both names map to the same profile file (e.g. they differ only in capitals).</summary>
     public bool IsSameProfile(string a, string b) => string.Equals(PathFor(a), PathFor(b), StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Deletes the profile and its backups, so a new profile given the same name later
+    /// doesn't inherit them.</summary>
     public void Delete(string name)
     {
         var path = PathFor(name);
         if (File.Exists(path)) File.Delete(path);
+        var backups = BackupFolderFor(name);
+        if (Directory.Exists(backups)) Directory.Delete(backups, recursive: true);
     }
 
     /// <summary>Loads a profile from an arbitrary file path (as opposed to Load(name), which only

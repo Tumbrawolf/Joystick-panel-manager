@@ -1,6 +1,8 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
 using ClaudFlight.Core.Keyboard;
+using ClaudFlight.Core.Mapping;
 using ClaudFlight.Core.Models;
 
 namespace ClaudFlight.App;
@@ -15,9 +17,16 @@ public sealed record RemapSlot(Guid DeviceGuid, ControlKind Kind, int Index, Inp
 }
 
 /// <summary>Something a slot currently does: a vJoy Binding or a KeyBinding, described for display.</summary>
-public sealed record RemapOutput(string Description, object Source, bool Shifted)
+public sealed record RemapOutput(string Description, object Source, bool Shifted, string? ModeName = null, string Warning = "")
 {
-    public override string ToString() => Description;
+    public Visibility WarningVisibility => Warning.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+    public override string ToString() => Warning.Length > 0 ? $"{Description}. {Warning}" : Description;
+
+    // A rebuilt list's rows are new rows, so a screen reader never gets an old row's discarded
+    // Change/Remove buttons (see GameEntryRow).
+    public bool Equals(RemapOutput? other) => ReferenceEquals(this, other);
+    public override int GetHashCode() => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
 }
 
 /// <summary>What the connected vJoy device offers, or Available = false when vJoy isn't installed
@@ -29,7 +38,7 @@ public sealed record VJoyLimits(bool Available, int Buttons, int Hats, Func<VJoy
 /// to the profile straight away.</summary>
 public partial class RemapWindow : Window
 {
-    private enum OutputType { VJoyButton, VJoyAxis, VJoyHat, Key, Nudge }
+    private enum OutputType { VJoyButton, VJoyAxis, VJoyHat, Key, Nudge, KeySequence }
 
     // ToString is what screen readers say for a dropdown entry.
     private sealed record Option<T>(string Display, T Value)
@@ -45,6 +54,8 @@ public partial class RemapWindow : Window
     private readonly MainWindow _host;
     private readonly RemapSlot _slot;
     private bool _loading = true;
+    private readonly DispatcherTimer _zoneTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
+    private readonly DispatcherTimer _testCooldown = new();
 
     /// <summary>The output being changed (loaded into the form), or null when the form adds a new one.</summary>
     private object? _editing;
@@ -67,6 +78,7 @@ public partial class RemapWindow : Window
             (ControlKind.Axis, InputPart.Whole) => "The whole axis, passed straight through to a vJoy axis. To use either end of its travel as a button or key, use its + and − markers instead.",
             (_, InputPart.Up or InputPart.Right or InputPart.Down or InputPart.Left) => "One direction of the hat, acting as a button. Pushing it diagonally presses both neighbouring directions.",
             (_, InputPart.Positive or InputPart.Negative) => "One end of the axis's travel, acting as a button: it counts as pressed once the axis is pushed past the point below.",
+            (_, InputPart.Zone) => "Stretches of the axis's travel, each acting as a button while the axis is inside it - e.g. 0-5% for idle cut-off or 95-100% for afterburner. Add one output per zone.",
             _ => "A button: it can press vJoy buttons and/or keyboard keys, or move a vJoy axis - as many as you like at once.",
         };
 
@@ -78,9 +90,27 @@ public partial class RemapWindow : Window
             [
                 new("vJoy button", OutputType.VJoyButton),
                 new("Keyboard key", OutputType.Key),
+                new("Key sequence (macro)", OutputType.KeySequence),
                 new("Move a vJoy axis (e.g. trim)", OutputType.Nudge),
             ],
         };
+        TriggerCombo.ItemsSource = new List<Option<PressTrigger>>
+        {
+            new("Pressed (straight away)", PressTrigger.Press),
+            new("Short press (tap and let go)", PressTrigger.ShortPress),
+            new($"Long press (held {MappingEngine.LongPressSeconds:0.#} s)", PressTrigger.LongPress),
+            new("Double tap", PressTrigger.DoubleTap),
+        };
+        TriggerCombo.SelectedIndex = 0;
+        TriggerRow.Visibility = slot.IsSwitch ? Visibility.Visible : Visibility.Collapsed;
+        ZoneRow.Visibility = slot.Part == InputPart.Zone ? Visibility.Visible : Visibility.Collapsed;
+        if (slot.Part == InputPart.Zone)
+        {
+            _zoneTimer.Tick += (_, _) => RefreshZoneLive();
+            _zoneTimer.Start();
+            Closed += (_, _) => _zoneTimer.Stop();
+            RefreshZoneLive();
+        }
         OutputTypeCombo.ItemsSource = types;
         KeyCombo.ItemsSource = KeyCatalog.Keys;
         KeyCombo.SelectedIndex = 0;
@@ -89,13 +119,34 @@ public partial class RemapWindow : Window
             new("Up (increase)", AxisNudge.Increase),
             new("Down (decrease)", AxisNudge.Decrease),
             new("Back to center", AxisNudge.Center),
+            new("To a set position (e.g. a flaps detent)", AxisNudge.SetTo),
         };
         NudgeCombo.SelectedIndex = 0;
 
-        UseAsShiftCheck.Visibility = slot.IsSwitch ? Visibility.Visible : Visibility.Collapsed;
+        // Modes: "Any mode" plus each set up in the profile (and the one being changed, should it be gone).
+        var editMode = (editOutput as Binding)?.ModeName ?? (editOutput as KeyBinding)?.ModeName;
+        var modeOptions = new List<Option<string?>> { new("Any mode", null) };
+        modeOptions.AddRange(host.ModeNames.Select(n => new Option<string?>(n, n)));
+        if (editMode is not null && !modeOptions.Any(o => string.Equals(o.Value, editMode, StringComparison.OrdinalIgnoreCase)))
+        {
+            modeOptions.Add(new Option<string?>($"{editMode} (no longer set up)", editMode));
+        }
+        ModeLayerCombo.ItemsSource = modeOptions;
+        ModeLayerCombo.SelectedItem = modeOptions.FirstOrDefault(o => string.Equals(o.Value, editMode, StringComparison.OrdinalIgnoreCase)) ?? modeOptions[0];
+        ModeLayerRow.Visibility = modeOptions.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+
+        _testCooldown.Tick += (_, _) =>
+        {
+            _testCooldown.Stop();
+            TestButton.IsEnabled = true;
+        };
+        Closed += (_, _) => _testCooldown.Stop();
+
+        // A zone needs its range to know when it's on, so a zone can't be the shift control.
+        UseAsShiftCheck.Visibility = slot.IsSwitch && slot.Part != InputPart.Zone ? Visibility.Visible : Visibility.Collapsed;
         UseAsShiftCheck.IsChecked = host.IsShiftControl(slot);
         ThresholdRow.Visibility = slot.Part is InputPart.Positive or InputPart.Negative ? Visibility.Visible : Visibility.Collapsed;
-        KeyboardNote.Visibility = types.Any(t => t.Value == OutputType.Key) && !host.KeyboardKeysOn ? Visibility.Visible : Visibility.Collapsed;
+        KeyboardNote.Visibility = types.Any(t => t.Value is OutputType.Key or OutputType.KeySequence) && !host.KeyboardKeysOn ? Visibility.Visible : Visibility.Collapsed;
 
         OutputTypeCombo.SelectedIndex = 0;
         if (editOutput is Binding { Shifted: true } or KeyBinding { Shifted: true }) ShiftLayerRadio.IsChecked = true;
@@ -108,6 +159,45 @@ public partial class RemapWindow : Window
     private OutputType SelectedType => (OutputTypeCombo.SelectedItem as Option<OutputType>)?.Value ?? OutputType.VJoyButton;
     private AxisNudge SelectedNudge => (NudgeCombo.SelectedItem as Option<AxisNudge>)?.Value ?? AxisNudge.Increase;
     private bool ShiftedLayer => ShiftLayerRadio.IsChecked == true;
+    private PressTrigger SelectedTrigger => (TriggerCombo.SelectedItem as Option<PressTrigger>)?.Value ?? PressTrigger.Press;
+    private string? SelectedModeName => (ModeLayerCombo.SelectedItem as Option<string?>)?.Value;
+    private SwitchMode SelectedSwitchMode => (ModeCombo.SelectedItem as Option<SwitchMode>)?.Value ?? SwitchMode.Hold;
+
+    private ControlKind TargetKind => SelectedType switch
+    {
+        OutputType.VJoyAxis or OutputType.Nudge => ControlKind.Axis,
+        OutputType.VJoyHat => ControlKind.Pov,
+        _ => ControlKind.Button,
+    };
+
+    // ---- Zones ----
+
+    private void RefreshZoneLive()
+    {
+        var position = _host.AxisTravel(_slot.DeviceGuid, _slot.Index);
+        ZoneLiveText.Text = position is { } p ? $"The axis is at {p * 100:0}% now" : "The axis isn't connected";
+    }
+
+    private void ZoneFromHere_Click(object sender, RoutedEventArgs e)
+    {
+        if (_host.AxisTravel(_slot.DeviceGuid, _slot.Index) is { } p) ZoneFromBox.Text = (p * 100).ToString("0");
+    }
+
+    private void ZoneToHere_Click(object sender, RoutedEventArgs e)
+    {
+        if (_host.AxisTravel(_slot.DeviceGuid, _slot.Index) is { } p) ZoneToBox.Text = (p * 100).ToString("0");
+    }
+
+    // ---- Key sequences ----
+
+    private void InsertKey_Click(object sender, RoutedEventArgs e)
+    {
+        if (KeyCombo.SelectedItem is not KeyOption key) return;
+        var text = SequenceBox.Text.TrimEnd();
+        SequenceBox.Text = (text.Length == 0 ? "" : text.EndsWith(',') || text.EndsWith('+') ? text + " " : text + ", ") + KeySequenceText.Name(key.VKey);
+        SequenceBox.Focus();
+        SequenceBox.CaretIndex = SequenceBox.Text.Length;
+    }
 
     // ---- Shift ----
 
@@ -139,13 +229,28 @@ public partial class RemapWindow : Window
         RefreshOutputs();
     }
 
+    private void ModeLayerCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loading) return;
+        if (_editing is not null) EndEdit(); // the list being changed from is gone
+        RefreshOutputs();
+        RefreshClash();
+    }
+
     private void RefreshOutputs()
     {
+        var mode = SelectedModeName;
         var outputs = _host.GetRemaps(_slot.DeviceGuid, _slot.Kind, _slot.Index, _slot.Part)
-            .Where(o => o.Shifted == ShiftedLayer).ToList();
+            .Where(o => o.Shifted == ShiftedLayer && string.Equals(o.ModeName, mode, StringComparison.OrdinalIgnoreCase)).ToList();
         OutputsList.ItemsSource = outputs;
         NoOutputsText.Visibility = outputs.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        OutputsGroup.Header = ShiftedLayer ? "While shift is held, does" : "Currently does";
+        OutputsGroup.Header = (mode, ShiftedLayer) switch
+        {
+            (null, true) => "While shift is held, does",
+            (null, false) => "Currently does",
+            (_, true) => $"In {mode} mode, while shift is held, does",
+            _ => $"In {mode} mode, does",
+        };
     }
 
     // ---- The "Add" form ----
@@ -160,19 +265,55 @@ public partial class RemapWindow : Window
         if (!_loading) RefreshAddRows();
     }
 
-    private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => RefreshNudgeUnit();
+    private void ModeCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        RefreshNudgeUnit();
+        RefreshSayRow();
+    }
+
+    /// <summary>Spoken words only for a latching vJoy button.</summary>
+    private void RefreshSayRow() =>
+        SayRow.Visibility = SelectedType == OutputType.VJoyButton && SelectedSwitchMode == SwitchMode.Latch ? Visibility.Visible : Visibility.Collapsed;
+
+    private void TargetCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loading) RefreshClash();
+    }
+
+    private void KeyCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!_loading) RefreshClash();
+    }
+
+    /// <summary>Warns when the chosen vJoy output or key is already driven from another input.</summary>
+    private void RefreshClash()
+    {
+        ClashText.Text = SelectedType switch
+        {
+            OutputType.Key => KeyCombo.SelectedItem is KeyOption key ? _host.KeyClashNote(key.VKey, _slot, SelectedModeName) : "",
+            OutputType.KeySequence => "",
+            _ => TryGetVJoyId(out var id) && TargetCombo.SelectedItem is TargetOption target
+                ? _host.TargetClashNote(new OutputRef(id, TargetKind, target.Index), SelectedType == OutputType.Nudge, _slot, SelectedModeName)
+                : "",
+        };
+        ClashText.Visibility = ClashText.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
 
     private void RefreshAddRows()
     {
         var type = SelectedType;
-        var isKey = type == OutputType.Key;
+        var isSequence = type == OutputType.KeySequence;
+        var isKey = type == OutputType.Key || isSequence;
         var isNudge = type == OutputType.Nudge;
 
         VJoyIdRow.Visibility = isKey ? Visibility.Collapsed : Visibility.Visible;
         TargetRow.Visibility = isKey ? Visibility.Collapsed : Visibility.Visible;
         KeyRow.Visibility = isKey ? Visibility.Visible : Visibility.Collapsed;
+        SequenceRow.Visibility = isSequence ? Visibility.Visible : Visibility.Collapsed;
+        InsertKeyButton.Visibility = isSequence ? Visibility.Visible : Visibility.Collapsed;
         NudgeRow.Visibility = isNudge ? Visibility.Visible : Visibility.Collapsed;
         NudgeAmountRow.Visibility = isNudge && SelectedNudge != AxisNudge.Center ? Visibility.Visible : Visibility.Collapsed;
+        TestResultText.Text = "";
         TargetLabel.Text = type switch
         {
             OutputType.VJoyAxis or OutputType.Nudge => "Axis:",
@@ -197,7 +338,7 @@ public partial class RemapWindow : Window
                 new("Tap the key when switched on", SwitchMode.PulseOnPress),
                 new("Tap the key on every flip (on and off)", SwitchMode.PulseOnBoth),
             ],
-            OutputType.Nudge when SelectedNudge != AxisNudge.Center =>
+            OutputType.Nudge when SelectedNudge is AxisNudge.Increase or AxisNudge.Decrease =>
             [
                 new("Keep moving while held", SwitchMode.Hold),
                 new("One step per press", SwitchMode.PulseOnPress),
@@ -209,15 +350,19 @@ public partial class RemapWindow : Window
         ModeRow.Visibility = modes.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         RefreshNudgeUnit();
+        RefreshSayRow();
         RefreshTargets();
+        RefreshClash();
     }
 
     private void RefreshNudgeUnit()
     {
+        var setTo = SelectedType == OutputType.Nudge && SelectedNudge == AxisNudge.SetTo;
         var perPress = (ModeCombo.SelectedItem as Option<SwitchMode>)?.Value is SwitchMode.PulseOnPress;
-        NudgeAmountUnit.Text = perPress ? "% of full travel per press" : "% of full travel per second";
+        NudgeAmountUnit.Text = setTo ? "% along its travel (0 = one end, 100 = the other)"
+            : perPress ? "% of full travel per press" : "% of full travel per second";
         if (_loading) return;
-        NudgeAmountBox.Text = perPress ? "5" : "50";
+        NudgeAmountBox.Text = setTo ? "50" : perPress ? "5" : "50";
     }
 
     private void VJoyIdBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -233,7 +378,7 @@ public partial class RemapWindow : Window
     private void RefreshTargets()
     {
         VJoyLimitText.Text = "";
-        if (SelectedType == OutputType.Key) return;
+        if (SelectedType is OutputType.Key or OutputType.KeySequence) return;
         var id = TryGetVJoyId(out var parsed) ? parsed : 1;
         var limits = _host.GetVJoyLimits(id);
 
@@ -302,15 +447,28 @@ public partial class RemapWindow : Window
                 mode = binding.Mode;
                 SelectOption(ModeCombo, mode);
                 NudgeAmountBox.Text = (binding.NudgeAmount * 100).ToString("0.#");
+                SayOnBox.Text = binding.SayOn ?? "";
+                SayOffBox.Text = binding.SayOff ?? "";
                 threshold = binding.AxisThreshold;
+                SelectOption(TriggerCombo, binding.Trigger);
+                ShowZone(binding.ZoneFrom, binding.ZoneTo);
                 break;
             }
+            case KeyBinding { Sequence.Count: > 0 } sequence:
+                if (!SelectOption(OutputTypeCombo, OutputType.KeySequence)) return;
+                SequenceBox.Text = KeySequenceText.Format(sequence.Sequence);
+                threshold = sequence.AxisThreshold;
+                SelectOption(TriggerCombo, sequence.Trigger);
+                ShowZone(sequence.ZoneFrom, sequence.ZoneTo);
+                break;
             case KeyBinding keyBinding:
                 if (!SelectOption(OutputTypeCombo, OutputType.Key)) return;
                 KeyCombo.SelectedItem = KeyCatalog.Keys.FirstOrDefault(k => k.VKey == keyBinding.VirtualKeyCode) ?? KeyCombo.SelectedItem;
                 mode = keyBinding.HoldWhilePressed ? SwitchMode.Hold : keyBinding.TapOnRelease ? SwitchMode.PulseOnBoth : SwitchMode.PulseOnPress;
                 SelectOption(ModeCombo, mode);
                 threshold = keyBinding.AxisThreshold;
+                SelectOption(TriggerCombo, keyBinding.Trigger);
+                ShowZone(keyBinding.ZoneFrom, keyBinding.ZoneTo);
                 break;
             default:
                 return;
@@ -329,6 +487,13 @@ public partial class RemapWindow : Window
         AddGroup.Header = "Add";
         AddButton.Content = "Add";
         CancelEditButton.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowZone(double from, double to)
+    {
+        if (_slot.Part != InputPart.Zone) return;
+        ZoneFromBox.Text = (Math.Min(from, to) * 100).ToString("0.#");
+        ZoneToBox.Text = (Math.Max(from, to) * 100).ToString("0.#");
     }
 
     private static bool SelectOption<T>(ComboBox combo, T value)
@@ -367,19 +532,56 @@ public partial class RemapWindow : Window
             }
         }
 
-        if (SelectedType == OutputType.Key)
+        double zoneFrom = 0, zoneTo = 1;
+        if (_slot.Part == InputPart.Zone)
         {
-            if (KeyCombo.SelectedItem is not KeyOption key) return null;
+            if (!TryReadPercent(ZoneFromBox.Text, 0, 100, out zoneFrom) || !TryReadPercent(ZoneToBox.Text, 0, 100, out zoneTo))
+            {
+                Warn("Enter where the zone starts and ends, as percentages from 0 to 100.");
+                return null;
+            }
+            if (Math.Abs(zoneTo - zoneFrom) < 0.01)
+            {
+                Warn("Make the zone at least 1% wide.");
+                return null;
+            }
+            (zoneFrom, zoneTo) = (Math.Min(zoneFrom, zoneTo), Math.Max(zoneFrom, zoneTo));
+        }
+        var trigger = _slot.IsSwitch ? SelectedTrigger : PressTrigger.Press;
+
+        if (SelectedType is OutputType.Key or OutputType.KeySequence)
+        {
+            List<KeyStep>? sequence = null;
+            int vkey;
+            if (SelectedType == OutputType.KeySequence)
+            {
+                sequence = KeySequenceText.Parse(SequenceBox.Text, out var error);
+                if (sequence is null)
+                {
+                    Warn(error ?? "That key sequence couldn't be read.");
+                    return null;
+                }
+                vkey = sequence.First(s => s.Keys.Count > 0).Keys[0];
+            }
+            else if (KeyCombo.SelectedItem is KeyOption key) vkey = key.VKey;
+            else return null;
+
             return new KeyBinding
             {
                 Source = source,
-                VirtualKeyCode = key.VKey,
-                HoldWhilePressed = mode == SwitchMode.Hold,
-                TapOnRelease = mode == SwitchMode.PulseOnBoth,
+                VirtualKeyCode = vkey,
+                HoldWhilePressed = sequence is null && mode == SwitchMode.Hold,
+                TapOnRelease = sequence is null && mode == SwitchMode.PulseOnBoth,
                 PovDirection = InputParts.IsDirection(_slot.Part) ? InputParts.ToPovDirection(_slot.Part) : 0,
                 AxisThreshold = threshold,
                 AxisAboveThreshold = _slot.Part != InputPart.Negative,
                 Shifted = ShiftedLayer,
+                Trigger = trigger,
+                IsZone = _slot.Part == InputPart.Zone,
+                ZoneFrom = zoneFrom,
+                ZoneTo = zoneTo,
+                Sequence = sequence,
+                ModeName = SelectedModeName,
             };
         }
         else
@@ -402,13 +604,14 @@ public partial class RemapWindow : Window
                 Warn("Enter how far to move the axis, as a percentage from 1 to 100.");
                 return null;
             }
-
-            var targetKind = SelectedType switch
+            if (nudge == AxisNudge.SetTo && !TryReadPercent(NudgeAmountBox.Text, 0, 100, out nudgeAmount))
             {
-                OutputType.VJoyAxis or OutputType.Nudge => ControlKind.Axis,
-                OutputType.VJoyHat => ControlKind.Pov,
-                _ => ControlKind.Button,
-            };
+                Warn("Enter where to put the axis, as a percentage of its travel from 0 to 100.");
+                return null;
+            }
+
+            var targetKind = TargetKind;
+            var spoken = targetKind == ControlKind.Button && nudge == AxisNudge.None && mode == SwitchMode.Latch;
             return new Binding
             {
                 Source = source,
@@ -419,8 +622,29 @@ public partial class RemapWindow : Window
                 Shifted = ShiftedLayer,
                 Nudge = nudge,
                 NudgeAmount = nudgeAmount,
+                Trigger = trigger,
+                ZoneFrom = zoneFrom,
+                ZoneTo = zoneTo,
+                ModeName = SelectedModeName,
+                SayOn = spoken ? Words(SayOnBox.Text) : null,
+                SayOff = spoken ? Words(SayOffBox.Text) : null,
             };
         }
+    }
+
+    private static string? Words(string text) => string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+
+    private void Test_Click(object sender, RoutedEventArgs e)
+    {
+        if (BuildOutput() is not { } output) return;
+        var (message, busySeconds) = _host.TestRemap(output);
+        TestResultText.Text = message;
+        if (busySeconds <= 0) return;
+
+        // No second test until this one's done - and a tested Space or Enter key can't land on this button.
+        TestButton.IsEnabled = false;
+        _testCooldown.Interval = TimeSpan.FromSeconds(busySeconds);
+        _testCooldown.Start();
     }
 
     private static bool TryReadPercent(string text, double min, double max, out double fraction)

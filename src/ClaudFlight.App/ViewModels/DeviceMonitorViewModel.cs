@@ -40,6 +40,15 @@ public sealed class DeviceMonitorViewModel(Guid deviceGuid, string deviceName) :
         set => SetField(ref _highlightPressedKeys, value);
     }
 
+    private bool _showKeyState;
+
+    /// <summary>Latched keys stay lit; named keys show their shifted mappings while shift is held.</summary>
+    public bool ShowKeyState
+    {
+        get => _showKeyState;
+        set => SetField(ref _showKeyState, value);
+    }
+
     public ObservableCollection<AxisReadingViewModel> Axes { get; } = [];
     public ObservableCollection<ButtonReadingViewModel> Buttons { get; } = [];
     public ObservableCollection<PovReadingViewModel> Povs { get; } = [];
